@@ -15,3 +15,4 @@ TestResults/
 compile_commands.json
 # Logs produced by local runs
 *.jsonl
+/artifacts/

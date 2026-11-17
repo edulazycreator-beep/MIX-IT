@@ -29,6 +29,23 @@ jobs:
       - name: Build and test
         shell: pwsh
         run: ./scripts/build-windows.ps1 -Configuration Debug
+      - name: Package (Release, self-contained) and smoke-test MixIt.exe
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -Output artifacts/MixIt-win-x64
+      - name: Upload MixIt-win-x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: MixIt-win-x64-${{ github.sha }}
+          path: artifacts/MixIt-win-x64
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload app logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-app-logs
+          path: ~/AppData/Local/MixIt/logs
+          if-no-files-found: ignore
       - name: Upload native test log on failure
         if: failure()
         uses: actions/upload-artifact@v4

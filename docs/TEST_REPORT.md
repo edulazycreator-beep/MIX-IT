@@ -1,5 +1,20 @@
 # MIX IT — Test Report
 
+## Run: GitHub Actions — 2026-11-17 (run 44031124025, commit 5516a44)
+
+First execution on real Windows with MSVC and on GitHub-hosted Linux.
+
+| Job | Environment | Result |
+|---|---|---|
+| Windows (MSVC + .NET) | windows-2022 runner (Windows Server 2022 build 20348, AMD EPYC, no GPU), MSVC 19.44, .NET 10 | ✅ native **75/75** (1 skipped: codec queries, no FFmpeg on Windows CI) · solution incl. **WPF app built with 0 warnings / 0 errors** · xUnit **30/30** · `mixit-probe` OK, DXGI reported 2 Microsoft Basic Render Driver adapters (one flagged software) |
+| Linux dev host | ubuntu-24.04 runner (kernel 7.0 azure), GCC 13.3, system FFmpeg | ✅ native **75/75** in Debug, ASan+UBSan and TSan · MinGW cross-check · xUnit **30/30** · probe |
+
+This closes the M1 items "MSVC build", "WPF compiles", "real xUnit" and
+"NuGet versions resolve". Still open: interactive WPF run, real-GPU and
+long-duration timing on Windows hardware, Windows FFmpeg.
+
+---
+
 ## Run: Milestone 2 (media pipeline foundation) — 2026-11-17
 
 **Environment:** same Linux development host as the M1 run (2 vCPU Xeon with

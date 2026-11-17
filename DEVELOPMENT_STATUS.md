@@ -1,9 +1,9 @@
 # MIX IT — Development Status
 
-_Last updated: 2026-11-17 (end of Milestone 2 session)_
+_Last updated: 2026-11-17 (first GitHub Actions run)_
 
 **Current milestone:** M2 — Media Pipeline Foundation → **IMPLEMENTED on the dev host** (gaps listed below)
-**Previous milestone:** M1 — Foundation → implemented; **Windows/MSVC verification still pending**
+**Previous milestone:** M1 — Foundation → implemented; **MSVC build, WPF compile and xUnit verified on GitHub Actions** (run 44031124025); interactive WPF run and real-GPU checks pending
 **Deviation from plan:** M2 was started before M1's Windows checks, at the user's request ("lanjut"), because this environment has no Windows/MSVC/nuget.org. Both milestones close only after the Windows checks below pass.
 
 ## Completed and verified this session (M2)
@@ -31,16 +31,25 @@ _Last updated: 2026-11-17 (end of Milestone 2 session)_
 | FFmpeg log routing into the engine log | PLANNED (M3) | needed once decoding starts |
 | Pinned Windows LGPL FFmpeg build (version, configure line, hash) | PLANNED | ADR-0004 step 5 |
 
-## Still unverified from M1
+## Verified on GitHub Actions (run 44031124025, commit 5516a44)
+
+| Item | Result |
+|---|---|
+| MSVC 19.44 build of engine + tests (`/W4 /WX`), Windows Server 2022 runner | ✅ 75/75 native tests (1 skipped: no FFmpeg) |
+| .NET solution incl. **MixIt.Desktop (WPF)** | ✅ 0 warnings, 0 errors |
+| Managed tests under **real xUnit** (`dotnet test`) | ✅ 30/30 on Windows and Linux |
+| NuGet versions in `Directory.Packages.props` | ✅ resolved |
+| DXGI enumeration on real Windows | ✅ 2 adapters (Microsoft Basic Render Driver; no GPU on runner) |
+| `mixit-probe` on Windows | ✅ |
+| Linux: Debug, ASan+UBSan, TSan, MinGW cross-check, xUnit | ✅ |
+
+## Still unverified
 
 | Item | Action |
 |---|---|
-| MSVC build of engine + tests | `scripts/build-windows.ps1` |
-| WPF desktop shell (never compiled) | build + run on Windows |
-| xUnit execution (`dotnet test`) | needs nuget.org |
-| NuGet versions in `Directory.Packages.props` | confirm on first restore |
-| DXGI with real GPUs | `mixit-probe` on Windows hardware |
-| GitHub Actions | push and fix first run |
+| Running the WPF app interactively | launch `MixIt.exe` on a Windows desktop |
+| DXGI / timing on real GPU hardware | `mixit-probe --codecs` and `--session-test 3600 --format 1920x1080@60000/1001` on a workstation |
+| FFmpeg on Windows (LGPL build) | ADR-0004 step 5, then CI with `FFMPEG_ROOT` |
 
 ## Build status (this session)
 
@@ -50,7 +59,8 @@ _Last updated: 2026-11-17 (end of Milestone 2 session)_
 | LGPL-policy variant (`-DMIXIT_REQUIRE_LGPL_FFMPEG=ON`) | ✅ |
 | MinGW-w64 cross-build | ✅ 0 warnings (without FFmpeg) |
 | .NET Interop, Core, Probe (offline mode) | ✅ 0 warnings |
-| MSVC, WPF | ⚠️ not run |
+| MSVC (Windows Server 2022, GitHub Actions) | ✅ 0 warnings |
+| WPF (`MixIt.Desktop`) | ✅ compiles, 0 warnings |
 
 ## Test results (this session)
 
@@ -58,14 +68,14 @@ Native **75/75** (Debug, ASan+UBSan, TSan incl. parallel under load) · Windows 
 
 ## Known issues
 
-1. Managed tests only run via a local xUnit-compatible shim; xUnit analyzers may flag style issues on the first real build.
-2. `MixIt.Desktop` has never been compiled and does not yet show sessions.
+1. `MixIt.Desktop` compiles in CI but has not been run interactively; it does not yet show sessions.
+2. CI runners have no GPU and no FFmpeg on Windows, so GPU and media-library paths are only partly covered there.
 3. Dev-host FFmpeg is GPL; it is tolerated only because the dev build disables the licence policy.
 4. Inputs cannot be added/removed while a session runs (hot-plug is M3).
 5. Session audio is consumed for measurement only; there is no mixer or audio output yet (M4).
 
 ## Next recommended tasks
 
-1. **On Windows:** `./scripts/build-windows.ps1`; fix MSVC/XAML/xUnit issues; run `mixit-probe --codecs` and `mixit-probe --session-test 3600 --format 1920x1080@60000/1001` on real hardware; record results.
+1. **On a Windows workstation:** run the WPF app, `mixit-probe --codecs` and `mixit-probe --session-test 3600 --format 1920x1080@60000/1001`; record results.
 2. Provide the pinned LGPL FFmpeg for Windows (ADR-0004 step 5).
 3. Start M3: extract the media source interface; FFmpeg file source (decode, timestamps → master clock); D3D11 device + GPU upload/convert; native swap-chain monitors in WPF; GPU program path.
