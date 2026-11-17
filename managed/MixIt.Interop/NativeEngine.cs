@@ -171,6 +171,7 @@ public sealed unsafe class NativeEngine : IDisposable
             AudioSampleRate = configuration.AudioSampleRate,
             AudioChannels = configuration.AudioChannels,
             ProgramPoolFrames = configuration.ProgramPoolFrames,
+            Compositor = (int)configuration.Compositor,
         };
         NativeResult r = NativeMethods.mixit_session_create(_handle, &c, out SessionHandle session);
         if (r != NativeResult.Ok)

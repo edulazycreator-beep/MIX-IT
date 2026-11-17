@@ -123,7 +123,19 @@ Status Session::create(const SessionConfig& config, Logger& logger, std::unique_
     const std::uint32_t pool = config.program_pool_frames == 0 ? kDefaultProgramPool : config.program_pool_frames;
     if (pool < 5 || pool > 64) return {MIXIT_E_INVALID_ARGUMENT, "program_pool_frames must be 5..64"};
     s->program_pool_ = std::make_unique<VideoFramePool>(config.width, config.height, pool);
-    s->compositor_ = make_cpu_compositor();
+    s->cpu_compositor_ = make_cpu_compositor();
+    s->compositor_ = s->cpu_compositor_.get();
+    if (config.compositor == CompositorPreference::D3D11 || config.compositor == CompositorPreference::D3D11Software) {
+        GpuCompositorOptions gpu;
+        gpu.software = config.compositor == CompositorPreference::D3D11Software;
+        if (Status g = make_d3d11_compositor(gpu, logger, s->gpu_compositor_); g.is_ok()) {
+            s->compositor_ = s->gpu_compositor_.get();
+        } else {
+            // A production must still start: fall back to the CPU path, loudly.
+            logger.logf(MIXIT_LOG_WARNING, "session", "GPU compositor unavailable, using CPU: {}", g.message());
+        }
+    }
+    s->compositor_kind_.store(static_cast<std::int32_t>(s->compositor_->kind()), std::memory_order_relaxed);
     // Latency of frame sync: one output period plus 2 ms scheduling margin.
     s->latency_ns_ = duration_of_index(0, config.frame_rate) + 2'000'000;
     logger.logf(MIXIT_LOG_INFO, "session", "session created: {}x{} @ {} fps, {} Hz x{} ch", config.width,
@@ -345,7 +357,7 @@ Status Session::start() {
         program_input = program_scene_.base_input;
     }
     logger_.logf(MIXIT_LOG_INFO, "session", "session started with {} input(s), program input {}, compositor {}",
-                 inputs_.size(), program_input, compositor_->name());
+                 inputs_.size(), program_input, compositor_kind_.load() == 0 ? "cpu" : "d3d11");
     return Status::ok();
 }
 
@@ -513,7 +525,16 @@ bool Session::render_bus(const BusScene& a, const BusScene* b, TransitionKind ki
     }
     SceneDraw db;
     if (b != nullptr) db = build_draw(*b);
-    const Status st = compositor_->render(da, b != nullptr ? &db : nullptr, kind, progress, *out.frame);
+    Status st = compositor_->render(da, b != nullptr ? &db : nullptr, kind, progress, *out.frame);
+    if (!st.is_ok() && compositor_ != cpu_compositor_.get()) {
+        // GPU failure (device removed, driver reset): continue on the CPU
+        // path for the rest of the session rather than putting black on air.
+        logger_.logf(MIXIT_LOG_ERROR, "session", "GPU compositor failed, switching to CPU: {}", st.message());
+        compositor_ = cpu_compositor_.get();
+        compositor_kind_.store(static_cast<std::int32_t>(CompositorKind::Cpu), std::memory_order_relaxed);
+        compositor_fallbacks_.fetch_add(1, std::memory_order_relaxed);
+        st = compositor_->render(da, b != nullptr ? &db : nullptr, kind, progress, *out.frame);
+    }
     if (!st.is_ok()) {
         out.frame = black_frame_;
         return false;
@@ -617,7 +638,8 @@ SessionStats Session::stats() const {
         s.transition_progress =
             transition_.active ? static_cast<float>(transition_.elapsed) / static_cast<float>(transition_.total) : 0.0f;
     }
-    s.compositor = compositor_ ? compositor_->name() : "";
+    s.compositor = static_cast<CompositorKind>(compositor_kind_.load(std::memory_order_relaxed));
+    s.compositor_fallbacks = compositor_fallbacks_.load(std::memory_order_relaxed);
     s.transitions_completed = transitions_completed_.load();
     s.composited_frames = composited_frames_.load();
     s.ticks = ticks_.load();

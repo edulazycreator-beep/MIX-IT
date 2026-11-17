@@ -2,13 +2,19 @@
 // compositor is checked against these same expectations.
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
+#include <vector>
 
 #include "media/compositor.hpp"
+#include "logging/logger.hpp"
 #include "media/media_types.hpp"
 
 using namespace mixit::media;
+using mixit::LoggerOptions;
+using mixit::Status;
 
 namespace {
 
@@ -192,4 +198,117 @@ TEST(Compositor, DownscaleAveragesBilinearly) {
     l.dest = {0, 0, 0.5f, 0.5f};
     ASSERT_TRUE(c->render(scene({l}), nullptr, TransitionKind::Cut, 0, *f.dst).is_ok());
     EXPECT_NEAR(at(*f.dst, 10, 5).g, 128, 2);
+}
+
+// ---- D3D11 compositor against the CPU reference (Windows; WARP on CI) ------
+
+namespace {
+
+void gradient(VideoFrame& f, int salt) {
+    for (std::uint32_t y = 0; y < f.height; ++y) {
+        for (std::uint32_t x = 0; x < f.width; ++x) {
+            std::uint8_t* p = f.data + static_cast<std::size_t>(y) * f.stride + static_cast<std::size_t>(x) * 4;
+            p[0] = static_cast<std::uint8_t>(x * 255 / (f.width - 1));
+            p[1] = static_cast<std::uint8_t>(y * 255 / (f.height - 1));
+            p[2] = static_cast<std::uint8_t>((x * 7 + y * 13 + static_cast<std::uint32_t>(salt)) & 0xFF);
+            p[3] = 255;
+        }
+    }
+}
+
+}  // namespace
+
+TEST(Compositor, D3D11MatchesTheCpuReference) {
+    LoggerOptions lo;
+    lo.min_level = MIXIT_LOG_OFF;
+    std::unique_ptr<mixit::Logger> logger;
+    ASSERT_TRUE(mixit::Logger::create(lo, logger).is_ok());
+    std::unique_ptr<Compositor> gpu;
+    GpuCompositorOptions options;
+    options.software = true;  // WARP: deterministic and present on every Windows 10/11 install
+    const Status st = make_d3d11_compositor(options, *logger, gpu);
+#if defined(_WIN32)
+    ASSERT_TRUE(st.is_ok()) << st.message();
+#else
+    ASSERT_EQ(st.code(), MIXIT_E_NOT_SUPPORTED);
+    GTEST_SKIP() << "Direct3D 11 is Windows only";
+#endif
+    ASSERT_EQ(gpu->kind(), CompositorKind::D3D11);
+    auto cpu = make_cpu_compositor();
+
+    VideoFramePool small(40, 24, 2);  // odd scale factors against the 64x36 output
+    VideoRef s1 = small.acquire();
+    VideoRef s2 = small.acquire();
+    gradient(*s1, 1);
+    gradient(*s2, 99);
+    for (std::uint32_t y = 0; y < 24; ++y)
+        for (std::uint32_t x = 0; x < 40; ++x) s2->data[y * s2->stride + x * 4 + 3] = static_cast<std::uint8_t>(x * 6);
+
+    struct Case {
+        const char* name = "";
+        SceneDraw a, b;
+        bool has_b = false;
+        TransitionKind kind = TransitionKind::Cut;
+        float progress = 0;
+    };
+    Frames f;
+    gradient(*f.red, 7);
+    std::vector<Case> cases;
+    {
+        Case c;
+        c.name = "copy";
+        LayerDraw l;
+        l.frame = &*f.red;
+        c.a = scene({l});
+        cases.push_back(c);
+    }
+    {
+        Case c;
+        c.name = "upscale+pip+alpha+crop";
+        LayerDraw base;
+        base.frame = &*s1;
+        LayerDraw pip;
+        pip.frame = &*s2;
+        pip.crop = {0.1f, 0.2f, 0.7f, 0.6f};
+        pip.dest = {0.4f, 0.3f, 0.5f, 0.6f};
+        pip.opacity = 0.7f;
+        c.a = scene({base, pip});
+        cases.push_back(c);
+    }
+    for (TransitionKind k : {TransitionKind::Mix, TransitionKind::Fade, TransitionKind::Wipe}) {
+        for (float p : {0.3f, 0.75f}) {
+            Case c;
+            c.name = "transition";
+            LayerDraw la;
+            la.frame = &*f.red;
+            LayerDraw lb;
+            lb.frame = &*s1;
+            c.a = scene({la});
+            c.b = scene({lb});
+            c.has_b = true;
+            c.kind = k;
+            c.progress = p;
+            cases.push_back(c);
+        }
+    }
+
+    VideoRef out_gpu = f.pool.acquire();
+    for (const Case& c : cases) {
+        ASSERT_TRUE(cpu->render(c.a, c.has_b ? &c.b : nullptr, c.kind, c.progress, *f.dst).is_ok());
+        const Status g = gpu->render(c.a, c.has_b ? &c.b : nullptr, c.kind, c.progress, *out_gpu);
+        ASSERT_TRUE(g.is_ok()) << c.name << ": " << g.message();
+        int max_diff = 0;
+        double sum = 0;
+        for (std::uint32_t y = 0; y < 36; ++y) {
+            for (std::uint32_t x = 0; x < 64 * 4; ++x) {
+                const int d = std::abs(f.dst->data[y * f.dst->stride + x] - out_gpu->data[y * out_gpu->stride + x]);
+                max_diff = std::max(max_diff, d);
+                sum += d;
+            }
+        }
+        const double mean = sum / (64.0 * 36 * 4);
+        // Filtering precision differs (GPU sub-texel weights vs 8-bit fixed point).
+        EXPECT_LE(max_diff, 4) << c.name << " kind " << static_cast<int>(c.kind) << " p " << c.progress;
+        EXPECT_LT(mean, 1.0) << c.name;
+    }
 }

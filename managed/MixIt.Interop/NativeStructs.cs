@@ -81,6 +81,8 @@ internal struct MixitSessionConfig
     public uint AudioSampleRate;
     public uint AudioChannels;
     public uint ProgramPoolFrames;
+    public int Compositor;   // API 0.3: MIXIT_COMPOSITOR_PREFER_*
+    public uint Reserved;    // API 0.3
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -119,6 +121,7 @@ internal struct MixitSessionStats
     public int Compositor;               // API 0.3: MIXIT_COMPOSITOR_*
     public ulong TransitionsCompleted;   // API 0.3
     public ulong CompositedFrames;       // API 0.3
+    public ulong CompositorFallbacks;    // API 0.3
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -212,9 +215,9 @@ internal static class NativeStructSizes
     public const int EngineDiagnostics = 48;
     public const int SystemCapabilities = 232;
     public const int GpuAdapterInfo = 160;
-    public const int SessionConfig = 32;
+    public const int SessionConfig = 40;
     public const int TestSourceConfig = 32;
-    public const int SessionStats = 128;
+    public const int SessionStats = 136;
     public const int LayerConfig = 48;
     public const int InputStats = 128;
     public const int FileSourceConfig = 16;

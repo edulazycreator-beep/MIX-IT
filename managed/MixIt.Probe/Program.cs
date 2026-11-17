@@ -17,6 +17,7 @@ internal static class Program
         int soakSeconds = 0;
         string? soakFile = null;
         SessionConfiguration soakFormat = new() { Width = 1280, Height = 720, FrameRate = MediaRate.Fps29_97 };
+        CompositorPreference compositor = CompositorPreference.Auto;
         for (int i = 0; i < args.Length; i++)
         {
             switch (args[i])
@@ -39,9 +40,22 @@ internal static class Program
                     }
                     soakFormat = f;
                     break;
+                case "--compositor" when i + 1 < args.Length:
+                    switch (args[++i])
+                    {
+                        case "auto": compositor = CompositorPreference.Auto; break;
+                        case "cpu": compositor = CompositorPreference.Cpu; break;
+                        case "d3d11": compositor = CompositorPreference.Direct3D11; break;
+                        case "warp": compositor = CompositorPreference.Direct3D11Software; break;
+                        default:
+                            Console.Error.WriteLine("invalid --compositor, expected auto, cpu, d3d11 or warp");
+                            return 2;
+                    }
+                    break;
                 case "-h" or "--help":
                     Console.WriteLine("usage: mixit-probe [--json] [--verbose] [--log-file <path>] [--codecs]");
-                    Console.WriteLine("                   [--session-test <seconds> [--format WxH@num[/den]] [--file <media file>]]");
+                    Console.WriteLine("                   [--session-test <seconds> [--format WxH@num[/den]] [--file <media file>]");
+                    Console.WriteLine("                                   [--compositor auto|cpu|d3d11|warp]]");
                     return 0;
                 default:
                     Console.Error.WriteLine($"unknown argument: {args[i]}");
@@ -63,7 +77,7 @@ internal static class Program
             int soakResult = 0;
             if (soakSeconds > 0)
             {
-                soakResult = SessionSoak.Run(host, soakSeconds, soakFormat, soakFile);
+                soakResult = SessionSoak.Run(host, soakSeconds, soakFormat with { Compositor = compositor }, soakFile);
                 host.Stop();
                 return soakResult;
             }

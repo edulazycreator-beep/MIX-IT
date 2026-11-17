@@ -20,29 +20,12 @@
 
 #include "logging/logger.hpp"
 #include "mixit/mixit_engine.h"
+#include "platform/com_ref.hpp"
 #include "platform/system_info.hpp"
 #include "platform/win_strings.hpp"
 
 namespace mixit {
 namespace {
-
-// Minimal owning pointer for COM interfaces (avoids a WRL/ATL dependency).
-template <typename T>
-class ComRef {
-public:
-    ComRef() = default;
-    ~ComRef() { reset(); }
-    ComRef(const ComRef&) = delete;
-    ComRef& operator=(const ComRef&) = delete;
-    T* get() const noexcept { return ptr_; }
-    T* operator->() const noexcept { return ptr_; }
-    T** put() noexcept { reset(); return &ptr_; }
-    void reset() noexcept {
-        if (ptr_ != nullptr) { ptr_->Release(); ptr_ = nullptr; }
-    }
-private:
-    T* ptr_ = nullptr;
-};
 
 std::uint32_t count_physical_cores(Logger& logger) {
     DWORD length = 0;

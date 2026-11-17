@@ -315,7 +315,21 @@ typedef struct mixit_session_config {
     uint32_t audio_sample_rate;    /* 48000 or 44100                                   */
     uint32_t audio_channels;       /* 1..8                                             */
     uint32_t program_pool_frames;  /* 0 = default (8); 5..64                           */
+    /* API 0.3 — appended; a 0.2-sized struct (32 bytes) means AUTO */
+    int32_t  compositor;           /* MIXIT_COMPOSITOR_PREFER_*                        */
+    uint32_t reserved;             /* must be 0                                        */
 } mixit_session_config;
+
+/* Compositor preference (mixit_session_config.compositor). AUTO selects the
+ * CPU compositor in API 0.3 (frames are CPU-resident; see ARCHITECTURE).
+ * D3D11 / D3D11_WARP fall back to the CPU compositor with a logged warning if
+ * Direct3D 11 is unavailable; mixit_session_stats.compositor reports the
+ * compositor actually in use. WARP is Microsoft's software rasterizer
+ * (testing, machines without a GPU). */
+#define MIXIT_COMPOSITOR_PREFER_AUTO       0
+#define MIXIT_COMPOSITOR_PREFER_CPU        1
+#define MIXIT_COMPOSITOR_PREFER_D3D11      2
+#define MIXIT_COMPOSITOR_PREFER_D3D11_WARP 3
 
 /* Synthetic test-signal input: colour bars, moving stripe, machine-readable
  * frame code, optional flash frames with matching audio clicks, sine tone.
@@ -353,6 +367,7 @@ typedef struct mixit_session_stats {
     int32_t  compositor;             /* MIXIT_COMPOSITOR_* */
     uint64_t transitions_completed;  /* cuts + finished transitions */
     uint64_t composited_frames;      /* bus frames rendered by the compositor (others are zero-copy) */
+    uint64_t compositor_fallbacks;   /* GPU failures that moved the session to the CPU compositor */
 } mixit_session_stats;
 
 typedef struct mixit_input_stats {

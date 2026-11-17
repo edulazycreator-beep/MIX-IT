@@ -84,7 +84,11 @@ internal static class SessionSoak
         Console.WriteLine($"input {second}: produced {fb.FramesProduced}, presented {fb.FramesPresented}, repeated {fb.FramesRepeated}, " +
                           $"decode errors {fb.DecodeErrors}, loops {fb.Loops}");
         if (fb.DecodeErrors > 0) failures.Add($"{fb.DecodeErrors} decode errors on input {second}");
-        Console.WriteLine($"compositor {fs.Compositor}: composited {fs.CompositedFrames} frames, transitions completed {fs.TransitionsCompleted}");
+        Console.WriteLine($"compositor {fs.Compositor} (requested {format.Compositor}): composited {fs.CompositedFrames} frames, " +
+                          $"transitions completed {fs.TransitionsCompleted}, GPU fallbacks {fs.CompositorFallbacks}");
+        bool gpuRequested = format.Compositor is CompositorPreference.Direct3D11 or CompositorPreference.Direct3D11Software;
+        if (gpuRequested && fs.Compositor != CompositorKind.Direct3D11) failures.Add("GPU compositor requested but not in use (see log)");
+        if (fs.CompositorFallbacks > 0) failures.Add($"{fs.CompositorFallbacks} GPU compositor failure(s)");
         if (seconds >= 4 && fs.TransitionsCompleted != 2) failures.Add($"{fs.TransitionsCompleted} transitions completed, expected 2");
         if (fs.ProgramInputId != main) failures.Add($"program ended on input {fs.ProgramInputId}, expected {main}");
         if (failures.Count == 0)

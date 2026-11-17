@@ -16,6 +16,7 @@
 #include <string>
 
 #include "core/status.hpp"
+#include "logging/logger.hpp"
 #include "media/media_types.hpp"
 
 namespace mixit::media {
@@ -51,10 +52,13 @@ enum class TransitionKind : std::int32_t {
     Wipe = 3,  // B wipes in from left to right
 };
 
+enum class CompositorKind : std::int32_t { Cpu = 0, D3D11 = 1 };  // = MIXIT_COMPOSITOR_*
+
 class Compositor {
 public:
     virtual ~Compositor() = default;
     [[nodiscard]] virtual std::string name() const = 0;
+    [[nodiscard]] virtual CompositorKind kind() const noexcept = 0;
 
     // Renders `a` into `dst` (cleared to black first). If `b` is non-null,
     // renders it too and blends A→B with `kind` at `progress` in [0, 1].
@@ -63,6 +67,13 @@ public:
 };
 
 std::unique_ptr<Compositor> make_cpu_compositor();
+
+struct GpuCompositorOptions {
+    bool software = false;  // WARP rasterizer (tests, machines without a GPU)
+};
+
+// Windows: Direct3D 11 compositor. Elsewhere returns NOT_SUPPORTED.
+Status make_d3d11_compositor(const GpuCompositorOptions& options, Logger& logger, std::unique_ptr<Compositor>& out);
 
 // Destination rectangle that fits a src_w x src_h picture into the output
 // while preserving its aspect ratio (letterbox / pillarbox), centred.

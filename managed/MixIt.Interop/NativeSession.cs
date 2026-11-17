@@ -28,6 +28,23 @@ public sealed record SessionConfiguration
     public uint AudioChannels { get; init; } = 2;
     /// <summary>0 = engine default.</summary>
     public uint ProgramPoolFrames { get; init; }
+    /// <summary>
+    /// Compositor to use. GPU preferences fall back to the CPU compositor (with
+    /// a logged warning) when Direct3D 11 is unavailable; check
+    /// <see cref="SessionStatistics.Compositor"/> for the one in use.
+    /// </summary>
+    public CompositorPreference Compositor { get; init; } = CompositorPreference.Auto;
+}
+
+/// <summary>Compositor preference (mirrors MIXIT_COMPOSITOR_PREFER_*).</summary>
+public enum CompositorPreference
+{
+    /// <summary>The engine's choice (CPU in API 0.3).</summary>
+    Auto = 0,
+    Cpu = 1,
+    Direct3D11 = 2,
+    /// <summary>Direct3D 11 on the WARP software rasterizer (testing, no GPU).</summary>
+    Direct3D11Software = 3,
 }
 
 /// <summary>Synthetic test-signal input options.</summary>
@@ -71,7 +88,8 @@ public readonly record struct SessionStatistics(
     float TransitionProgress,
     CompositorKind Compositor,
     ulong TransitionsCompleted,
-    ulong CompositedFrames);
+    ulong CompositedFrames,
+    ulong CompositorFallbacks);
 
 /// <summary>Video bus (mirrors MIXIT_BUS_*).</summary>
 public enum VideoBus
@@ -272,7 +290,7 @@ public sealed unsafe class NativeSession : IDisposable
             s.SkippedTicks, FromNs(s.MaxTickLatenessNs), s.ProgramFrames, s.ProgramBlackFrames, s.ProgramFramesDropped,
             s.ProgramPoolExhausted, FromNs(s.VideoLatencyLastNs), FromNs(s.VideoLatencyMaxNs), s.PreviewInputId,
             s.TransitionActive < 0 ? null : (TransitionKind)s.TransitionActive, s.TransitionProgress,
-            (CompositorKind)s.Compositor, s.TransitionsCompleted, s.CompositedFrames);
+            (CompositorKind)s.Compositor, s.TransitionsCompleted, s.CompositedFrames, s.CompositorFallbacks);
     }
 
     /// <summary>Counters of one input.</summary>

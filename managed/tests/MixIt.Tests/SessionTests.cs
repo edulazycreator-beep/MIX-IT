@@ -162,4 +162,15 @@ public class SessionTests
             Assert.Throws<MixItNativeException>(() => session.SetLayer(VideoBus.Program, 8, new LayerSettings { InputId = a })).Result);
         session.ClearLayer(VideoBus.Program, 0);
     }
+
+    [Fact]
+    public void GpuCompositorPreferenceIsHonouredOrFallsBack()
+    {
+        using var engine = NativeEngine.Create(new NativeEngineOptions());
+        using NativeSession session = engine.CreateSession(Small with { Compositor = CompositorPreference.Direct3D11Software });
+        CompositorKind expected = OperatingSystem.IsWindows() ? CompositorKind.Direct3D11 : CompositorKind.Cpu;
+        Assert.Equal(expected, session.GetStatistics().Compositor);
+        Assert.Equal(NativeResult.InvalidArgument, Assert.Throws<MixItNativeException>(() =>
+            engine.CreateSession(Small with { Compositor = (CompositorPreference)9 })).Result);
+    }
 }

@@ -47,6 +47,8 @@ public class InteropLayoutTests
         Assert.Equal(96, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.PreviewInputId)));
         Assert.Equal(112, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.TransitionsCompleted)));
         Assert.Equal(40, (int)Marshal.OffsetOf<MixitLayerConfig>(nameof(MixitLayerConfig.Opacity)));
+        Assert.Equal(32, (int)Marshal.OffsetOf<MixitSessionConfig>(nameof(MixitSessionConfig.Compositor)));
+        Assert.Equal(128, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.CompositorFallbacks)));
         Assert.Equal(8, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.FramesProduced)));
         Assert.Equal(104, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.AvOffsetMaxAbsNs)));
         Assert.Equal(112, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.DecodeErrors)));

@@ -208,6 +208,7 @@ public:
     CpuCompositor() : pool_(helper_count()) {}
 
     [[nodiscard]] std::string name() const override { return "cpu"; }
+    [[nodiscard]] CompositorKind kind() const noexcept override { return CompositorKind::Cpu; }
 
     Status render(const SceneDraw& a, const SceneDraw* b, TransitionKind kind, float progress,
                   VideoFrame& dst) noexcept override {

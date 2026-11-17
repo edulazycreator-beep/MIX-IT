@@ -40,6 +40,11 @@ class Logger;
 
 namespace mixit::media {
 
+// Which compositor a session uses. Auto = CPU in this release: frames are
+// CPU-resident until the GPU decode/display paths land, and the GPU path then
+// pays upload + readback on every frame (see ADR-0005).
+enum class CompositorPreference : std::int32_t { Auto = 0, Cpu = 1, D3D11 = 2, D3D11Software = 3 };
+
 struct SessionConfig {
     std::uint32_t width = 1920;
     std::uint32_t height = 1080;
@@ -47,6 +52,7 @@ struct SessionConfig {
     std::uint32_t sample_rate = 48000;
     std::uint32_t channels = 2;
     std::uint32_t program_pool_frames = 0;  // 0 = default (8)
+    CompositorPreference compositor = CompositorPreference::Auto;
 };
 
 enum class SessionState : std::int32_t { Configuring = 1, Running = 2, Stopped = 3, Closed = 4 };
@@ -103,7 +109,8 @@ struct SessionStats {
     std::uint32_t preview_input_id = 0;
     std::int32_t transition_active = -1;       // TransitionKind while running, -1 otherwise
     float transition_progress = 0.0f;
-    std::string compositor;                    // "cpu", "d3d11"
+    CompositorKind compositor = CompositorKind::Cpu;
+    std::uint64_t compositor_fallbacks = 0;    // GPU failures that switched the session to the CPU compositor
     std::uint64_t transitions_completed = 0;
     std::uint64_t composited_frames = 0;       // bus frames rendered by the compositor (not zero-copy)
 };
@@ -197,7 +204,14 @@ private:
     std::uint32_t next_input_id_ = 1;
 
     std::unique_ptr<VideoFramePool> program_pool_;
-    std::unique_ptr<Compositor> compositor_;  // output thread only (after start)
+    // GPU compositor (optional) with the CPU compositor as permanent fallback.
+    // The active pointer is switched only by the output thread (or while no
+    // output thread runs); stats read the atomic kind.
+    std::unique_ptr<Compositor> cpu_compositor_;
+    std::unique_ptr<Compositor> gpu_compositor_;
+    Compositor* compositor_ = nullptr;
+    std::atomic<std::int32_t> compositor_kind_{0};
+    std::atomic<std::uint64_t> compositor_fallbacks_{0};
     VideoRef black_frame_;
     MediaQueue<ProgramFrame> program_out_{2, OverflowPolicy::DropOldest};
     MediaQueue<ProgramFrame> preview_out_{2, OverflowPolicy::DropOldest};

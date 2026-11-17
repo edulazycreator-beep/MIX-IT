@@ -24,7 +24,7 @@ struct Studio {
     mixit_session session = nullptr;
     uint32_t a = 0, b = 0;
 
-    Studio() {
+    explicit Studio(int32_t compositor = MIXIT_COMPOSITOR_PREFER_AUTO) {
         mixit_engine_config ec{};
         ec.struct_size = sizeof(ec);
         ec.api_version = MIXIT_API_VERSION;
@@ -38,6 +38,7 @@ struct Studio {
         sc.frame_rate_den = 1;
         sc.audio_sample_rate = 48000;
         sc.audio_channels = 2;
+        sc.compositor = compositor;
         EXPECT_EQ(mixit_session_create(engine, &sc, &session), MIXIT_OK);
         a = add(W, H);
         b = add(W, H);
@@ -248,4 +249,72 @@ TEST(Buses, PreviewIsOnlyRenderedWhileWatched) {
     ASSERT_TRUE(s.frame(MIXIT_BUS_PREVIEW).has_value());
     wait_ms(300);
     EXPECT_GT(s.stats().composited_frames, 0u);
+}
+
+TEST(Buses, GpuCompositorPreferenceRendersOrFallsBack) {
+    Studio s(MIXIT_COMPOSITOR_PREFER_D3D11_WARP);
+#if defined(_WIN32)
+    EXPECT_EQ(s.stats().compositor, MIXIT_COMPOSITOR_D3D11);
+#else
+    EXPECT_EQ(s.stats().compositor, MIXIT_COMPOSITOR_CPU) << "falls back where Direct3D is unavailable";
+#endif
+    ASSERT_EQ(mixit_session_set_program_input(s.session, s.a), MIXIT_OK);
+    mixit_layer_config l{};
+    l.struct_size = sizeof(l);
+    l.input_id = s.b;
+    l.crop_w = l.crop_h = 1.0f;
+    l.dest_x = l.dest_y = 0.5f;
+    l.dest_w = l.dest_h = 0.5f;
+    l.opacity = 1.0f;
+    ASSERT_EQ(mixit_session_set_layer(s.session, MIXIT_BUS_PROGRAM, 0, &l), MIXIT_OK);
+    ASSERT_EQ(mixit_session_set_preview_input(s.session, s.b), MIXIT_OK);
+    ASSERT_EQ(mixit_session_start(s.session), MIXIT_OK);
+    wait_ms(400);
+    auto buf = s.frame(MIXIT_BUS_PROGRAM);
+    ASSERT_TRUE(buf.has_value());
+    const auto base = mixit::media::decode_frame_code(buf->data(), W * 4, W, H);
+    ASSERT_TRUE(base.has_value());
+    EXPECT_EQ(base->source_id, s.a);
+    const auto pip = mixit::media::decode_frame_code(buf->data() + (H / 2) * W * 4 + (W / 2) * 4, W * 4, W / 2, H / 2);
+    ASSERT_TRUE(pip.has_value());
+    EXPECT_EQ(pip->source_id, s.b);
+    ASSERT_EQ(mixit_session_start_transition(s.session, MIXIT_TRANSITION_MIX, 6), MIXIT_OK);
+    for (int i = 0; i < 40 && s.stats().transition_active != -1; ++i) wait_ms(25);
+    const mixit_session_stats st = s.stats();
+    EXPECT_EQ(st.program_input_id, s.b);
+    EXPECT_EQ(st.compositor_fallbacks, 0u);
+    EXPECT_GT(st.composited_frames, 0u);
+}
+
+TEST(Buses, SessionConfigCompatibilityAndValidation) {
+    mixit_engine engine = nullptr;
+    mixit_engine_config ec{};
+    ec.struct_size = sizeof(ec);
+    ec.api_version = MIXIT_API_VERSION;
+    ec.min_log_level = MIXIT_LOG_OFF;
+    ASSERT_EQ(mixit_engine_create(&ec, &engine), MIXIT_OK);
+    mixit_session_config sc{};
+    sc.struct_size = 32;  // API 0.2 layout: compositor defaults to AUTO
+    sc.width = 320;
+    sc.height = 180;
+    sc.frame_rate_num = 25;
+    sc.frame_rate_den = 1;
+    sc.audio_sample_rate = 48000;
+    sc.audio_channels = 2;
+    sc.compositor = 99;  // beyond the caller's struct: must be ignored
+    mixit_session session = nullptr;
+    ASSERT_EQ(mixit_session_create(engine, &sc, &session), MIXIT_OK) << last_error();
+    mixit_session_stats st{};
+    st.struct_size = 96;  // API 0.2 stats size
+    ASSERT_EQ(mixit_session_get_stats(session, &st), MIXIT_OK);
+    EXPECT_EQ(st.struct_size, 96u);
+    EXPECT_EQ(st.preview_input_id, 0u);
+    EXPECT_EQ(mixit_session_destroy(session), MIXIT_OK);
+
+    sc.struct_size = sizeof(sc);
+    EXPECT_EQ(mixit_session_create(engine, &sc, &session), MIXIT_E_INVALID_ARGUMENT);
+    sc.compositor = MIXIT_COMPOSITOR_PREFER_CPU;
+    sc.reserved = 1;
+    EXPECT_EQ(mixit_session_create(engine, &sc, &session), MIXIT_E_INVALID_ARGUMENT);
+    EXPECT_EQ(mixit_engine_destroy(engine), MIXIT_OK);
 }

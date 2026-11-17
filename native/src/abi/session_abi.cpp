@@ -10,9 +10,10 @@
 #include "media/file_source.hpp"
 #include "media/session.hpp"
 
-static_assert(sizeof(mixit_session_config) == 32);
+static_assert(sizeof(mixit_session_config) == 40);
+constexpr std::uint32_t kSessionConfigV02Size = 32;
 static_assert(sizeof(mixit_test_source_config) == 32);
-static_assert(sizeof(mixit_session_stats) == 128);
+static_assert(sizeof(mixit_session_stats) == 136);
 static_assert(offsetof(mixit_session_stats, preview_input_id) == 96);
 static_assert(sizeof(mixit_layer_config) == 48);
 
@@ -101,8 +102,17 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_create(mixit_engine engine, cons
     constexpr const char* fn = "mixit_session_create";
     if (out_session == nullptr) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_session is NULL");
     *out_session = nullptr;
-    if (!struct_size_ok(config)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "config NULL or struct_size too small");
+    if (!mixit::abi::struct_size_at_least(config, kSessionConfigV02Size)) {
+        return fail(fn, MIXIT_E_INVALID_ARGUMENT, "config NULL or struct_size too small");
+    }
     return guarded(fn, [&]() -> mixit_result {
+        mixit_session_config c{};
+        std::memcpy(&c, config, std::min<std::size_t>(config->struct_size, sizeof(c)));  // shorter = older ABI
+        config = &c;
+        if (c.compositor < MIXIT_COMPOSITOR_PREFER_AUTO || c.compositor > MIXIT_COMPOSITOR_PREFER_D3D11_WARP) {
+            return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown compositor preference");
+        }
+        if (c.reserved != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "reserved must be 0");
         const auto e = mixit::abi::resolve_engine(engine);
         if (!e) return fail(fn, MIXIT_E_INVALID_HANDLE, "invalid engine handle");
         media::SessionConfig cfg;
@@ -112,6 +122,7 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_create(mixit_engine engine, cons
         cfg.sample_rate = config->audio_sample_rate;
         cfg.channels = config->audio_channels;
         cfg.program_pool_frames = config->program_pool_frames;
+        cfg.compositor = static_cast<media::CompositorPreference>(config->compositor);
         std::shared_ptr<media::Session> session;
         if (Status s = e->create_session(cfg, session); !s.is_ok()) return report(fn, s);
         auto handle = std::make_shared<SessionHandle>(SessionHandle{e, std::move(session)});
@@ -236,9 +247,10 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_get_stats(mixit_session session,
         o.preview_input_id = st.preview_input_id;
         o.transition_active = st.transition_active;
         o.transition_progress = st.transition_progress;
-        o.compositor = st.compositor == "d3d11" ? MIXIT_COMPOSITOR_D3D11 : MIXIT_COMPOSITOR_CPU;
+        o.compositor = static_cast<int32_t>(st.compositor);
         o.transitions_completed = st.transitions_completed;
         o.composited_frames = st.composited_frames;
+        o.compositor_fallbacks = st.compositor_fallbacks;
         mixit::abi::write_out_prefix(out_stats, o);
         return MIXIT_OK;
     });
