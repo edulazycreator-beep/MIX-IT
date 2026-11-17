@@ -56,12 +56,18 @@ $commit = (git rev-parse --short HEAD 2>$null)
 MIX IT $($version -join '.') (development build, commit $commit)
 =====================================================================
 
-This is an EARLY DEVELOPMENT BUILD (Milestones 1-2), not a production tool.
+This is an EARLY DEVELOPMENT BUILD (Milestones 1-3), not a production tool.
 
 What works:
-  MixIt.exe        Opens the operator shell. Only "Hardware Diagnostics" is
-                   functional: engine status, CPU/RAM/OS/GPU detection and the
-                   live engine log. All other sections are labelled "Planned".
+  MixIt.exe        Operator shell with two working sections:
+                   * Production Studio (video only): add test-signal and media
+                     file inputs, preview/program monitors with tally, CUT,
+                     AUTO (mix / fade-through-black / wipe), picture-in-picture,
+                     production formats 720p/1080p at 25-60 fps. An optional
+                     GPU (Direct3D 11) compositor is EXPERIMENTAL.
+                   * Hardware Diagnostics: engine status, CPU/RAM/OS/GPU
+                     detection and the live engine log.
+                   All other sections are labelled "Planned".
   mixit-probe.exe  Command-line diagnostics:
                      mixit-probe.exe --verbose
                      mixit-probe.exe --codecs
@@ -73,8 +79,11 @@ What works:
                    Add a media file as the second input:
                      mixit-probe.exe --session-test 30 --file C:\path\clip.mp4
 
-Not yet available in the app UI: inputs, GPU rendering, audio mixing,
-streaming, recording, graphics.
+                   Compare compositors on your hardware:
+                     mixit-probe.exe --session-test 30 --format 1920x1080@60 --compositor d3d11
+
+Not yet available: capture devices (cameras, HDMI), audio mixing and
+monitoring, streaming, recording, graphics/titles. Nothing is broadcast.
 
 FFmpeg: the FFmpeg DLLs in this folder are an LGPL build (see FFMPEG_LICENSE.txt);
 the engine refuses to use non-LGPL FFmpeg builds.
@@ -122,4 +131,20 @@ finally {
         if (-not $app.WaitForExit(10000)) { Stop-Process -Id $app.Id -Force }
     }
 }
+Write-Host '==> Self-test: MixIt.exe --self-test production' -ForegroundColor Cyan
+# Drives the Production Studio view model like an operator (two test inputs,
+# start, monitors, CUT, AUTO, PiP, stop) and exits 0 = PASS, 1 = FAIL.
+$startedAt = Get-Date
+$selfTest = Start-Process -FilePath (Join-Path $out 'MixIt.exe') -ArgumentList '--self-test', 'production' -PassThru
+if (-not $selfTest.WaitForExit(90000)) {
+    Stop-Process -Id $selfTest.Id -Force
+    throw 'MixIt.exe --self-test production did not finish within 90 s'
+}
+$log = Get-ChildItem $logDir -Filter 'mixit-*.jsonl' -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -ge $startedAt } | Sort-Object LastWriteTime | Select-Object -Last 1
+$verdict = if ($log) { Select-String -Path $log.FullName -Pattern 'Self-test production' | ForEach-Object { $_.Line } } else { @() }
+$verdict | ForEach-Object { Write-Host "  $_" }
+if ($selfTest.ExitCode -ne 0) { throw "Production self-test failed (exit code $($selfTest.ExitCode))" }
+if (-not ($verdict -match 'Self-test production: PASS')) { throw 'Production self-test wrote no PASS line to the log' }
+
 Write-Host "Package ready: $out" -ForegroundColor Green

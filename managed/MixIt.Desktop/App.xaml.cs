@@ -4,6 +4,7 @@ using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MixIt.Core.Engine;
+using MixIt.Core.Production;
 using MixIt.Desktop.ViewModels;
 using MixIt.Interop;
 
@@ -30,6 +31,8 @@ public partial class App : Application
             LogFilePath = Path.Combine(logDirectory, $"mixit-{DateTime.Now:yyyyMMdd-HHmmss}.jsonl"),
         });
         services.AddSingleton<EngineHost>();
+        services.AddSingleton<ProductionService>();
+        services.AddSingleton<ProductionViewModel>();
         services.AddSingleton<DiagnosticsViewModel>();
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<MainWindow>();
@@ -52,7 +55,15 @@ public partial class App : Application
 
         var window = _services.GetRequiredService<MainWindow>();
         window.Show();
-        _ = _services.GetRequiredService<MainViewModel>().InitializeAsync();
+        Task init = _services.GetRequiredService<MainViewModel>().InitializeAsync();
+
+        // CI / support check: drives the real Production Studio view model and
+        // monitors, then exits with 0 (pass) or 1 (fail). See SelfTest.cs.
+        if (e.Args.Length == 2 && e.Args[0] == "--self-test" && e.Args[1] == "production")
+        {
+            _ = SelfTest.RunProductionAsync(init, _services.GetRequiredService<ProductionViewModel>(),
+                _services.GetRequiredService<ProductionService>(), _services.GetRequiredService<ILogger<App>>(), this);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

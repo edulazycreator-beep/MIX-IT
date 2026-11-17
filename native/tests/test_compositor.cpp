@@ -210,7 +210,10 @@ void gradient(VideoFrame& f, int salt) {
             std::uint8_t* p = f.data + static_cast<std::size_t>(y) * f.stride + static_cast<std::size_t>(x) * 4;
             p[0] = static_cast<std::uint8_t>(x * 255 / (f.width - 1));
             p[1] = static_cast<std::uint8_t>(y * 255 / (f.height - 1));
-            p[2] = static_cast<std::uint8_t>((x * 7 + y * 13 + static_cast<std::uint32_t>(salt)) & 0xFF);
+            // Smooth content: on hard edges (wrap-around) the result depends on
+            // sub-texel filter precision, which differs between rasterizers.
+            p[2] = static_cast<std::uint8_t>(((x * 3 + y * 5) * 200) / ((f.width - 1) * 3 + (f.height - 1) * 5) +
+                                             static_cast<std::uint32_t>(salt) % 50);
             p[3] = 255;
         }
     }
@@ -298,17 +301,25 @@ TEST(Compositor, D3D11MatchesTheCpuReference) {
         const Status g = gpu->render(c.a, c.has_b ? &c.b : nullptr, c.kind, c.progress, *out_gpu);
         ASSERT_TRUE(g.is_ok()) << c.name << ": " << g.message();
         int max_diff = 0;
+        std::uint32_t at_x = 0, at_y = 0;
         double sum = 0;
         for (std::uint32_t y = 0; y < 36; ++y) {
             for (std::uint32_t x = 0; x < 64 * 4; ++x) {
                 const int d = std::abs(f.dst->data[y * f.dst->stride + x] - out_gpu->data[y * out_gpu->stride + x]);
-                max_diff = std::max(max_diff, d);
+                if (d > max_diff) {
+                    max_diff = d;
+                    at_x = x;
+                    at_y = y;
+                }
                 sum += d;
             }
         }
         const double mean = sum / (64.0 * 36 * 4);
         // Filtering precision differs (GPU sub-texel weights vs 8-bit fixed point).
-        EXPECT_LE(max_diff, 4) << c.name << " kind " << static_cast<int>(c.kind) << " p " << c.progress;
+        EXPECT_LE(max_diff, 4) << c.name << " kind " << static_cast<int>(c.kind) << " p " << c.progress << " at pixel ("
+                               << at_x / 4 << ", " << at_y << ") channel " << at_x % 4 << ": cpu "
+                               << int{f.dst->data[at_y * f.dst->stride + at_x]} << " gpu "
+                               << int{out_gpu->data[at_y * out_gpu->stride + at_x]};
         EXPECT_LT(mean, 1.0) << c.name;
     }
 }

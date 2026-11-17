@@ -51,3 +51,17 @@ public sealed class AsyncCommand(Func<Task> execute, Func<bool>? canExecute = nu
 
     public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }
+
+/// <summary>Synchronous command with CommandManager-driven re-evaluation.</summary>
+public sealed class RelayCommand(Action<object?> execute, Func<object?, bool>? canExecute = null) : ICommand
+{
+    public event EventHandler? CanExecuteChanged
+    {
+        add => CommandManager.RequerySuggested += value;
+        remove => CommandManager.RequerySuggested -= value;
+    }
+
+    public bool CanExecute(object? parameter) => canExecute?.Invoke(parameter) ?? true;
+
+    public void Execute(object? parameter) => execute(parameter);
+}

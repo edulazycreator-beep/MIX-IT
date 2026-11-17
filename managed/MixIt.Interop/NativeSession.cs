@@ -335,6 +335,16 @@ public sealed unsafe class NativeSession : IDisposable
         return ToInfo(info);
     }
 
+    /// <summary>
+    /// Copies the latest frame of a bus into unmanaged memory (e.g. a
+    /// WriteableBitmap back buffer) of <paramref name="length"/> bytes.
+    /// </summary>
+    public ProgramFrameInfo? TryCopyBusFrame(VideoBus bus, nint destination, int length, int stride)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        return TryCopyBusFrame(bus, new Span<byte>((void*)destination, length), stride);
+    }
+
     /// <summary>Size of the current program frame without copying it; null if none yet.</summary>
     public (int Width, int Height)? GetProgramFrameSize() => GetBusFrameSize(VideoBus.Program);
 

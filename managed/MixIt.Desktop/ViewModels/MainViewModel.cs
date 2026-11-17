@@ -16,14 +16,15 @@ public sealed class MainViewModel : ObservableObject
     private string _engineStatus = "Engine stopped";
     private bool _engineHealthy;
 
-    public MainViewModel(EngineHost host, DiagnosticsViewModel diagnostics)
+    public MainViewModel(EngineHost host, DiagnosticsViewModel diagnostics, ProductionViewModel production)
     {
         _host = host;
         Diagnostics = diagnostics;
+        Production = production;
         Sections =
         [
-            new("Production Studio", "Planned — Milestone 3", false),
-            new("Input Manager", "Planned — Milestone 3", false),
+            new("Production Studio", "Available — video only (M3)", true),
+            new("Input Manager", "Planned — inputs are added in Production Studio", false),
             new("Audio Mixer", "Planned — Milestone 4", false),
             new("Streaming", "Planned — Milestone 5", false),
             new("Recording", "Planned — Milestone 5", false),
@@ -35,7 +36,8 @@ public sealed class MainViewModel : ObservableObject
             new("Settings", "Planned — Milestone 8", false),
             new("License", "Planned — Milestone 9", false),
         ];
-        _selectedSection = Sections.First(s => s.IsAvailable);
+        _selectedSection = Sections[0];
+        Production.IsActive = true;
         _host.StateChanged += (_, state) => System.Windows.Application.Current?.Dispatcher.InvokeAsync(() => UpdateStatus(state));
     }
 
@@ -43,16 +45,26 @@ public sealed class MainViewModel : ObservableObject
 
     public DiagnosticsViewModel Diagnostics { get; }
 
+    public ProductionViewModel Production { get; }
+
     public SectionItem SelectedSection
     {
         get => _selectedSection;
         set
         {
-            if (SetProperty(ref _selectedSection, value)) OnPropertyChanged(nameof(ShowDiagnostics));
+            if (!SetProperty(ref _selectedSection, value)) return;
+            OnPropertyChanged(nameof(ShowDiagnostics));
+            OnPropertyChanged(nameof(ShowProduction));
+            OnPropertyChanged(nameof(ShowPlaceholder));
+            Production.IsActive = ShowProduction;  // monitors poll only while visible
         }
     }
 
     public bool ShowDiagnostics => SelectedSection.Title == "Hardware Diagnostics";
+
+    public bool ShowProduction => SelectedSection.Title == "Production Studio";
+
+    public bool ShowPlaceholder => !ShowDiagnostics && !ShowProduction;
 
     public string EngineStatus
     {
