@@ -1,4 +1,4 @@
-# FFmpeg discovery for the native engine (see docs/adr/0004-ffmpeg-integration-and-licensing.md).
+# FFmpeg (>= 6.0: avcodec, avformat, avutil, swscale, swresample) discovery for the native engine (see docs/adr/0004-ffmpeg-integration-and-licensing.md).
 #
 #   MIXIT_WITH_FFMPEG          AUTO (default) | ON | OFF
 #   MIXIT_REQUIRE_LGPL_FFMPEG  ON by default on Windows (product), OFF on dev hosts.
@@ -23,11 +23,12 @@ if(NOT MIXIT_WITH_FFMPEG STREQUAL "OFF")
     if(FFMPEG_ROOT)
         find_path(MIXIT_FFMPEG_INCLUDE_DIR libavcodec/avcodec.h PATHS "${FFMPEG_ROOT}/include" NO_DEFAULT_PATH)
         set(_libs "")
-        foreach(_lib avcodec avformat avutil)
+        foreach(_lib avcodec avformat avutil swscale swresample)
             find_library(MIXIT_FFMPEG_${_lib}_LIBRARY NAMES ${_lib} PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH)
             list(APPEND _libs ${MIXIT_FFMPEG_${_lib}_LIBRARY})
         endforeach()
-        if(MIXIT_FFMPEG_INCLUDE_DIR AND MIXIT_FFMPEG_avcodec_LIBRARY AND MIXIT_FFMPEG_avformat_LIBRARY AND MIXIT_FFMPEG_avutil_LIBRARY)
+        if(MIXIT_FFMPEG_INCLUDE_DIR AND MIXIT_FFMPEG_avcodec_LIBRARY AND MIXIT_FFMPEG_avformat_LIBRARY AND MIXIT_FFMPEG_avutil_LIBRARY
+           AND MIXIT_FFMPEG_swscale_LIBRARY AND MIXIT_FFMPEG_swresample_LIBRARY)
             add_library(mixit::ffmpeg INTERFACE IMPORTED)
             target_include_directories(mixit::ffmpeg SYSTEM INTERFACE "${MIXIT_FFMPEG_INCLUDE_DIR}")
             target_link_libraries(mixit::ffmpeg INTERFACE ${_libs})
@@ -39,7 +40,7 @@ if(NOT MIXIT_WITH_FFMPEG STREQUAL "OFF")
         # compiling (it would pick up the host's libraries).
         find_package(PkgConfig QUIET)
         if(PkgConfig_FOUND)
-            pkg_check_modules(MIXIT_FFMPEG_PC QUIET IMPORTED_TARGET libavcodec libavformat libavutil)
+            pkg_check_modules(MIXIT_FFMPEG_PC QUIET IMPORTED_TARGET libavcodec libavformat libavutil libswscale libswresample)
             if(MIXIT_FFMPEG_PC_FOUND)
                 add_library(mixit::ffmpeg INTERFACE IMPORTED)
                 target_link_libraries(mixit::ffmpeg INTERFACE PkgConfig::MIXIT_FFMPEG_PC)

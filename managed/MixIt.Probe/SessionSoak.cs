@@ -13,7 +13,7 @@ internal static class SessionSoak
     // Half a sample period at 48 kHz: the best achievable flash/click alignment.
     private const long MaxAvOffsetNs = 10_417;
 
-    public static int Run(EngineHost host, int seconds, SessionConfiguration format)
+    public static int Run(EngineHost host, int seconds, SessionConfiguration format, string? file = null)
     {
         using NativeSession session = host.CreateSession(format);
         uint main = session.AddTestSource(new TestSourceOptions
@@ -21,15 +21,18 @@ internal static class SessionSoak
             Width = format.Width, Height = format.Height, FrameRate = format.FrameRate,
             FlashIntervalFrames = (uint)Math.Max(1, Math.Round(format.FrameRate.Value)),
         });
-        uint second = session.AddTestSource(new TestSourceOptions
-        {
-            Width = Math.Max(64, format.Width / 2 / 2 * 2), Height = Math.Max(64, format.Height / 2 / 2 * 2),
-            FrameRate = MediaRate.Fps25, ToneHz = 440,
-        });
+        uint second = file is null
+            ? session.AddTestSource(new TestSourceOptions
+            {
+                Width = Math.Max(64, format.Width / 2 / 2 * 2), Height = Math.Max(64, format.Height / 2 / 2 * 2),
+                FrameRate = MediaRate.Fps25, ToneHz = 440,
+            })
+            : session.AddFileSource(file, loop: true);
         session.SetProgramInput(main);
 
         Console.WriteLine($"Session soak: {format.Width}x{format.Height} @ {format.FrameRate} fps for {seconds} s " +
-                          $"(input {main}: same format + sync flash; input {second}: half size @ 25 fps)");
+                          (file is null ? $"(input {main}: same format + sync flash; input {second}: half size @ 25 fps)"
+                                        : $"(input {main}: same format + sync flash; input {second}: file '{file}', looping)"));
         Console.WriteLine("   t  ticks  late  black  latency(ms)  in1 drop/rep/skip  in2 rep/skip  A/V max(us)");
 
         session.Start();
@@ -67,7 +70,9 @@ internal static class SessionSoak
                           $"max lateness {fs.MaxTickLateness.TotalMilliseconds:0.00} ms, max video latency {fs.VideoLatencyMax.TotalMilliseconds:0.0} ms");
         Console.WriteLine($"input {main}: produced {fa.FramesProduced}, presented {fa.FramesPresented}, A/V events {fa.AvSyncEvents}, " +
                           $"max |offset| {fa.AvOffsetMaxAbsNanoseconds} ns, audio blocks {fa.AudioBlocksConsumed}");
-        Console.WriteLine($"input {second}: produced {fb.FramesProduced}, presented {fb.FramesPresented}, repeated {fb.FramesRepeated}");
+        Console.WriteLine($"input {second}: produced {fb.FramesProduced}, presented {fb.FramesPresented}, repeated {fb.FramesRepeated}, " +
+                          $"decode errors {fb.DecodeErrors}, loops {fb.Loops}");
+        if (fb.DecodeErrors > 0) failures.Add($"{fb.DecodeErrors} decode errors on input {second}");
         if (failures.Count == 0)
         {
             Console.WriteLine("RESULT: PASS");

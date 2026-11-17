@@ -133,6 +133,16 @@ internal struct MixitInputStats
     public ulong AvSyncEvents;
     public long AvOffsetLastNs;
     public long AvOffsetMaxAbsNs;
+    public ulong DecodeErrors;   // API 0.3
+    public ulong Loops;          // API 0.3
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitFileSourceConfig
+{
+    public uint StructSize;
+    public uint Flags;
+    public byte* Path;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -182,7 +192,8 @@ internal static class NativeStructSizes
     public const int SessionConfig = 32;
     public const int TestSourceConfig = 32;
     public const int SessionStats = 96;
-    public const int InputStats = 112;
+    public const int InputStats = 128;
+    public const int FileSourceConfig = 16;
     public const int VideoFrameInfo = 56;
     public const int MediaLibraryInfo = 152;
     public const int CodecInfo = 128;

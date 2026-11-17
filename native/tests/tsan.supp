@@ -1,0 +1,10 @@
+# ThreadSanitizer suppressions for MIX IT tests.
+#
+# FFmpeg (system build) is not compiled with ThreadSanitizer. With frame
+# threading, decoder worker threads hand frame buffers to the caller through
+# reference counts implemented with C11 atomics *inside* libavutil, which TSan
+# cannot observe, so it reports the later av_buffer_unref() as a race with the
+# worker's allocation. Only stacks passing through these FFmpeg modules are
+# suppressed; races in MIX IT code are still reported.
+race:libavutil.so
+race:libavcodec.so

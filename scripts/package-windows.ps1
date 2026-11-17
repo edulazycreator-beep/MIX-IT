@@ -42,7 +42,11 @@ Invoke-Step 'Publish mixit-probe' { dotnet publish managed/MixIt.Probe/MixIt.Pro
 
 # The engine (and FFmpeg DLLs when built with FFmpeg) must sit next to the executables.
 Copy-Item (Join-Path $nativeDir 'mixit_engine.dll') $out -Force
-Get-ChildItem $nativeDir -Filter 'av*.dll' -ErrorAction SilentlyContinue | Copy-Item -Destination $out -Force
+Get-ChildItem $nativeDir -Include 'av*.dll', 'sw*.dll' -Recurse -ErrorAction SilentlyContinue | Copy-Item -Destination $out -Force
+if ($env:FFMPEG_ROOT -and (Test-Path (Join-Path $env:FFMPEG_ROOT 'LICENSE.txt'))) {
+    # LGPL: ship the licence text with the FFmpeg DLLs (see THIRD_PARTY_LICENSES.md).
+    Copy-Item (Join-Path $env:FFMPEG_ROOT 'LICENSE.txt') (Join-Path $out 'FFMPEG_LICENSE.txt') -Force
+}
 Copy-Item (Join-Path $root 'docs/THIRD_PARTY_LICENSES.md') $out -Force
 
 $version = (Select-String -Path (Join-Path $root 'native/include/mixit/mixit_engine.h') -Pattern 'MIXIT_API_VERSION_(MAJOR|MINOR|PATCH) (\d+)').Matches |
@@ -66,8 +70,14 @@ What works:
                    (test signal, frame sync, program bus, A/V sync check) and
                    prints PASS/FAIL.
 
-Not yet available: cameras/capture, video files, GPU rendering, audio mixing,
+                   Add a media file as the second input:
+                     mixit-probe.exe --session-test 30 --file C:\path\clip.mp4
+
+Not yet available in the app UI: inputs, GPU rendering, audio mixing,
 streaming, recording, graphics.
+
+FFmpeg: the FFmpeg DLLs in this folder are an LGPL build (see FFMPEG_LICENSE.txt);
+the engine refuses to use non-LGPL FFmpeg builds.
 
 Requirements: Windows 10/11 x64. No .NET installation needed.
 Logs: %LOCALAPPDATA%\MixIt\logs\

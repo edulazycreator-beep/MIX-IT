@@ -26,6 +26,11 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+      - name: Fetch pinned LGPL FFmpeg (BtbN/FFmpeg-Builds)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/fetch-ffmpeg-windows.ps1 -Tag autobuild-2026-11-16-15-29 -Destination build/ffmpeg
       - name: Build and test
         shell: pwsh
         run: ./scripts/build-windows.ps1 -Configuration Debug
@@ -67,7 +72,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libgtest-dev libgmock-dev g++-mingw-w64-x86-64-posix \
-                                  pkg-config libavcodec-dev libavformat-dev libavutil-dev
+                                  pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
       - name: Allow sanitizers on high-entropy ASLR kernels
         # TSan/ASan abort with "unexpected memory mapping" when mmap_rnd_bits > 28.
         run: sudo sysctl vm.mmap_rnd_bits=28

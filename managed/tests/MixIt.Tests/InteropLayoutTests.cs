@@ -26,6 +26,7 @@ public class InteropLayoutTests
         Assert.Equal(NativeStructSizes.VideoFrameInfo, Unsafe.SizeOf<MixitVideoFrameInfo>());
         Assert.Equal(NativeStructSizes.MediaLibraryInfo, Unsafe.SizeOf<MixitMediaLibraryInfo>());
         Assert.Equal(NativeStructSizes.CodecInfo, Unsafe.SizeOf<MixitCodecInfo>());
+        Assert.Equal(NativeStructSizes.FileSourceConfig, Unsafe.SizeOf<MixitFileSourceConfig>());
     }
 
     [Fact]
@@ -44,6 +45,7 @@ public class InteropLayoutTests
         Assert.Equal(88, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.VideoLatencyMaxNs)));
         Assert.Equal(8, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.FramesProduced)));
         Assert.Equal(104, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.AvOffsetMaxAbsNs)));
+        Assert.Equal(112, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.DecodeErrors)));
         Assert.Equal(24, (int)Marshal.OffsetOf<MixitVideoFrameInfo>(nameof(MixitVideoFrameInfo.TickPtsNs)));
         Assert.Equal(48, (int)Marshal.OffsetOf<MixitVideoFrameInfo>(nameof(MixitVideoFrameInfo.TickIndex)));
     }

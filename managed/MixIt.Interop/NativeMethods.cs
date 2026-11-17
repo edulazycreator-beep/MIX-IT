@@ -21,7 +21,7 @@ internal static unsafe partial class NativeMethods
     // Version of the C header this binding was written against. Must be kept
     // in sync with MIXIT_API_VERSION_* in mixit_engine.h.
     public const uint ExpectedApiMajor = 0;
-    public const uint ExpectedApiMinor = 2;
+    public const uint ExpectedApiMinor = 3;
     public const uint ExpectedApiPatch = 0;
     public const uint ExpectedApiVersion = (ExpectedApiMajor << 24) | (ExpectedApiMinor << 12) | ExpectedApiPatch;
 
@@ -92,6 +92,10 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial NativeResult mixit_session_add_test_source(SessionHandle session, MixitTestSourceConfig* config, uint* inputId);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_add_file_source(SessionHandle session, MixitFileSourceConfig* config, uint* inputId);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

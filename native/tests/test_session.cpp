@@ -354,3 +354,22 @@ TEST(SessionInternal, PoolsAreFullyReturnedAfterStop) {
     session->close();
     EXPECT_EQ(session->state(), mixit::media::SessionState::Closed);
 }
+
+// API 0.3 appended fields to mixit_input_stats. A caller compiled against
+// 0.2 passes the old size: it must still work, and nothing may be written
+// past the size it declared.
+TEST(SessionAbiCompat, InputStatsAcceptsTheApi02StructSize) {
+    Fixture fx;
+    const uint32_t id = fx.add_source(640, 360, 30, 1);
+    mixit_input_stats s{};
+    s.struct_size = 112;  // sizeof(mixit_input_stats) in API 0.2
+    s.decode_errors = 0xDEADBEEF;
+    s.loops = 0xFEEDFACE;
+    ASSERT_EQ(mixit_session_get_input_stats(fx.session, id, &s), MIXIT_OK) << last_error();
+    EXPECT_EQ(s.input_id, id);
+    EXPECT_EQ(s.struct_size, 112u);
+    EXPECT_EQ(s.decode_errors, 0xDEADBEEFu) << "wrote past the caller's struct_size";
+    EXPECT_EQ(s.loops, 0xFEEDFACEu);
+    s.struct_size = 104;
+    EXPECT_EQ(mixit_session_get_input_stats(fx.session, id, &s), MIXIT_E_INVALID_ARGUMENT);
+}

@@ -82,7 +82,9 @@ public readonly record struct InputStatistics(
     ulong AudioBlocksConsumed,
     ulong AvSyncEvents,
     long AvOffsetLastNanoseconds,
-    long AvOffsetMaxAbsNanoseconds);
+    long AvOffsetMaxAbsNanoseconds,
+    ulong DecodeErrors,
+    ulong Loops);
 
 /// <summary>Description of a copied program frame (BGRA8).</summary>
 public readonly record struct ProgramFrameInfo(
@@ -125,6 +127,33 @@ public sealed unsafe class NativeSession : IDisposable
         return id;
     }
 
+    /// <summary>
+    /// Adds a local media file decoded with FFmpeg (only while not running).
+    /// Throws with <see cref="NativeResult.NotFound"/> for a missing file and
+    /// <see cref="NativeResult.NotSupported"/> when FFmpeg is unavailable.
+    /// </summary>
+    public uint AddFileSource(string path, bool loop = false)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        byte* utf8 = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(path);
+        try
+        {
+            var c = new MixitFileSourceConfig
+            {
+                StructSize = (uint)sizeof(MixitFileSourceConfig),
+                Flags = loop ? 1u : 0u,
+                Path = utf8,
+            };
+            uint id;
+            Check(NativeMethods.mixit_session_add_file_source(_handle, &c, &id), "mixit_session_add_file_source");
+            return id;
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)utf8);
+        }
+    }
+
     /// <summary>Removes an input (only while not running).</summary>
     public void RemoveInput(uint inputId) =>
         Check(NativeMethods.mixit_session_remove_input(_handle, inputId), "mixit_session_remove_input");
@@ -158,7 +187,8 @@ public sealed unsafe class NativeSession : IDisposable
         Check(NativeMethods.mixit_session_get_input_stats(_handle, inputId, &s), "mixit_session_get_input_stats");
         return new InputStatistics(s.InputId, s.FramesProduced, s.FramesDropped, s.FramesPoolExhausted,
             s.FramesPresented, s.FramesRepeated, s.FramesSkipped, s.ProducerLateSkips, s.AudioBlocksProduced,
-            s.AudioBlocksDropped, s.AudioBlocksConsumed, s.AvSyncEvents, s.AvOffsetLastNs, s.AvOffsetMaxAbsNs);
+            s.AudioBlocksDropped, s.AudioBlocksConsumed, s.AvSyncEvents, s.AvOffsetLastNs, s.AvOffsetMaxAbsNs,
+            s.DecodeErrors, s.Loops);
     }
 
     /// <summary>

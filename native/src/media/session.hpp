@@ -26,6 +26,7 @@
 
 #include "core/status.hpp"
 #include "media/media_queue.hpp"
+#include "media/media_source.hpp"
 #include "media/media_types.hpp"
 #include "media/test_signal.hpp"
 #include "media/time_base.hpp"
@@ -62,6 +63,8 @@ struct InputStats {
     std::uint64_t av_sync_events = 0;
     std::int64_t av_offset_last_ns = 0;     // click time - flash frame time (source timestamps)
     std::int64_t av_offset_max_abs_ns = 0;
+    std::uint64_t decode_errors = 0;       // file/capture sources
+    std::uint64_t loops = 0;               // file sources: times the file restarted
 };
 
 struct SessionStats {
@@ -100,6 +103,8 @@ public:
     Session& operator=(const Session&) = delete;
 
     Status add_test_source(TestSignalConfig config, std::uint32_t& out_input_id);
+    // Adds any source (file, capture). Only while not running.
+    Status add_source(std::unique_ptr<MediaSource> source, std::uint32_t& out_input_id);
     Status remove_input(std::uint32_t input_id);
     Status set_program_input(std::uint32_t input_id);  // 0 = black
     Status start();
@@ -133,6 +138,7 @@ private:
     void consume_audio(Input& input) noexcept;
     void stop_threads() noexcept;
     Input* find_input(std::uint32_t id) const noexcept;
+    Status add_input_locked(std::unique_ptr<MediaSource> source, std::uint32_t& out_input_id);
 
     SessionConfig config_;
     Logger& logger_;

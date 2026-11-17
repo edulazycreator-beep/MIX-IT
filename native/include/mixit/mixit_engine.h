@@ -67,7 +67,7 @@ extern "C" {
 #define MIXIT_VERSION_PATCH(v) ((v) & 0xFFFu)
 
 #define MIXIT_API_VERSION_MAJOR 0
-#define MIXIT_API_VERSION_MINOR 2
+#define MIXIT_API_VERSION_MINOR 3
 #define MIXIT_API_VERSION_PATCH 0
 #define MIXIT_API_VERSION \
     MIXIT_MAKE_VERSION(MIXIT_API_VERSION_MAJOR, MIXIT_API_VERSION_MINOR, MIXIT_API_VERSION_PATCH)
@@ -364,6 +364,9 @@ typedef struct mixit_input_stats {
     uint64_t av_sync_events;         /* flash/click pairs measured */
     int64_t  av_offset_last_ns;      /* click time - flash frame time */
     int64_t  av_offset_max_abs_ns;
+    /* API 0.3 — appended; filled only if the caller's struct_size covers them */
+    uint64_t decode_errors;          /* file/capture sources */
+    uint64_t loops;                  /* file sources: completed loops */
 } mixit_input_stats;
 
 typedef struct mixit_video_frame_info {
@@ -391,6 +394,23 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_destroy(mixit_session session);
 /* Lifecycle step 4. Only while not RUNNING. Input ids are unique per session (1..255). */
 MIXIT_API mixit_result MIXIT_CALL mixit_session_add_test_source(mixit_session session,
                                                                  const mixit_test_source_config* config,
+                                                                 uint32_t* out_input_id);
+
+#define MIXIT_FILE_SOURCE_LOOP (1u << 0)
+
+typedef struct mixit_file_source_config {
+    uint32_t    struct_size;
+    uint32_t    flags;           /* MIXIT_FILE_SOURCE_* */
+    const char* path;            /* UTF-8 path of a local media file (no URLs) */
+} mixit_file_source_config;
+
+/* API 0.3. Adds a media-file input decoded with FFmpeg (video converted to
+ * BGRA at the file's size, audio resampled to the session format), paced by
+ * the file's timestamps. Only while not RUNNING.
+ * MIXIT_E_NOT_FOUND: file missing. MIXIT_E_NOT_SUPPORTED: FFmpeg unusable or
+ * no decodable streams. MIXIT_E_IO: cannot open/parse. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_file_source(mixit_session session,
+                                                                 const mixit_file_source_config* config,
                                                                  uint32_t* out_input_id);
 
 /* Only while not RUNNING. If it was the program input, program becomes black (0). */

@@ -15,6 +15,7 @@ internal static class Program
         bool json = false, verbose = false, codecs = false;
         string? logFile = null;
         int soakSeconds = 0;
+        string? soakFile = null;
         SessionConfiguration soakFormat = new() { Width = 1280, Height = 720, FrameRate = MediaRate.Fps29_97 };
         for (int i = 0; i < args.Length; i++)
         {
@@ -28,6 +29,7 @@ internal static class Program
                     soakSeconds = sec;
                     i++;
                     break;
+                case "--file" when i + 1 < args.Length: soakFile = args[++i]; break;
                 case "--format" when i + 1 < args.Length:
                     SessionConfiguration? f = SessionSoak.ParseFormat(args[++i]);
                     if (f is null)
@@ -39,7 +41,7 @@ internal static class Program
                     break;
                 case "-h" or "--help":
                     Console.WriteLine("usage: mixit-probe [--json] [--verbose] [--log-file <path>] [--codecs]");
-                    Console.WriteLine("                   [--session-test <seconds> [--format WxH@num[/den]]]");
+                    Console.WriteLine("                   [--session-test <seconds> [--format WxH@num[/den]] [--file <media file>]]");
                     return 0;
                 default:
                     Console.Error.WriteLine($"unknown argument: {args[i]}");
@@ -61,7 +63,7 @@ internal static class Program
             int soakResult = 0;
             if (soakSeconds > 0)
             {
-                soakResult = SessionSoak.Run(host, soakSeconds, soakFormat);
+                soakResult = SessionSoak.Run(host, soakSeconds, soakFormat, soakFile);
                 host.Stop();
                 return soakResult;
             }

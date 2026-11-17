@@ -6,7 +6,8 @@
   -->
   <Target Name="MixItIncludeNativeEngine" BeforeTargets="AssignTargetPaths" Condition="'$(MixItCopyNativeEngine)' == 'true'">
     <ItemGroup>
-      <_MixItNativeCandidate Include="$(MixItNativeDir)/mixit_engine.dll;$(MixItNativeDir)/mixit_engine.pdb;$(MixItNativeDir)/libmixit_engine.so*" />
+      <!-- the engine plus the FFmpeg DLLs it links on Windows (LGPL shared build) -->
+      <_MixItNativeCandidate Include="$(MixItNativeDir)/mixit_engine.dll;$(MixItNativeDir)/mixit_engine.pdb;$(MixItNativeDir)/libmixit_engine.so*;$(MixItNativeDir)/av*.dll;$(MixItNativeDir)/sw*.dll" />
       <None Include="@(_MixItNativeCandidate)" Condition="Exists('%(FullPath)')"
             Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Visible="false" />
     </ItemGroup>

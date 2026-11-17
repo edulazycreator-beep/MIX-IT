@@ -95,6 +95,18 @@ public class SessionTests
     }
 
     [Fact]
+    public void FileSourceErrorsAreMapped()
+    {
+        using var engine = NativeEngine.Create(new NativeEngineOptions());
+        using NativeSession session = engine.CreateSession(Small);
+        string missing = Path.Combine(Path.GetTempPath(), "mixit-missing-" + Guid.NewGuid() + ".mp4");
+        var ex = Assert.Throws<MixItNativeException>(() => session.AddFileSource(missing));
+        NativeResult expected = NativeEngine.GetMediaLibraryInfo().Usable ? NativeResult.NotFound : NativeResult.NotSupported;
+        Assert.Equal(expected, ex.Result);
+        Assert.Equal("mixit_session_add_file_source", ex.Function);
+    }
+
+    [Fact]
     public void MediaRateFormatting()
     {
         Assert.Equal("30000/1001", MediaRate.Fps29_97.ToString());

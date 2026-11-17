@@ -1,10 +1,13 @@
 // C ABI for sessions (API 0.2): validation, handle resolution, struct
 // conversion. Session behaviour lives in media/session.cpp.
+#include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <string>
 
 #include "abi/abi_common.hpp"
+#include "media/file_source.hpp"
 #include "media/session.hpp"
 
 static_assert(sizeof(mixit_session_config) == 32);
@@ -12,7 +15,12 @@ static_assert(sizeof(mixit_test_source_config) == 32);
 static_assert(sizeof(mixit_session_stats) == 96);
 static_assert(offsetof(mixit_session_stats, ticks) == 16);
 static_assert(offsetof(mixit_session_stats, video_latency_max_ns) == 88);
-static_assert(sizeof(mixit_input_stats) == 112);
+static_assert(sizeof(mixit_input_stats) == 128);
+static_assert(offsetof(mixit_input_stats, decode_errors) == 112);
+static_assert(sizeof(mixit_file_source_config) == 16);
+
+// Size of mixit_input_stats as defined by API 0.2 (before appended fields).
+constexpr std::uint32_t kInputStatsV02Size = 112;
 static_assert(offsetof(mixit_input_stats, frames_produced) == 8);
 static_assert(offsetof(mixit_input_stats, av_offset_max_abs_ns) == 104);
 static_assert(sizeof(mixit_video_frame_info) == 56);
@@ -111,6 +119,28 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_add_test_source(mixit_session se
     });
 }
 
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_file_source(mixit_session session,
+                                                                 const mixit_file_source_config* config,
+                                                                 uint32_t* out_input_id) {
+    constexpr const char* fn = "mixit_session_add_file_source";
+    if (out_input_id == nullptr) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_input_id is NULL");
+    *out_input_id = 0;
+    if (!struct_size_ok(config)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "config NULL or struct_size too small");
+    if (config->path == nullptr || config->path[0] == '\0') return fail(fn, MIXIT_E_INVALID_ARGUMENT, "path is NULL or empty");
+    if ((config->flags & ~MIXIT_FILE_SOURCE_LOOP) != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown flags");
+    return guarded(fn, [&]() -> mixit_result {
+        const auto h = session == nullptr ? nullptr : session_registry().find(to_id(session));
+        if (!h) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        media::FileSourceOptions options;
+        options.loop = (config->flags & MIXIT_FILE_SOURCE_LOOP) != 0;
+        std::unique_ptr<media::MediaSource> source;
+        if (Status st = media::open_file_source(config->path, options, h->engine->logger(), source); !st.is_ok()) {
+            return report(fn, st);
+        }
+        return report(fn, h->session->add_source(std::move(source), *out_input_id));
+    });
+}
+
 MIXIT_API mixit_result MIXIT_CALL mixit_session_remove_input(mixit_session session, uint32_t input_id) {
     constexpr const char* fn = "mixit_session_remove_input";
     return guarded(fn, [&]() -> mixit_result {
@@ -177,7 +207,11 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_get_stats(mixit_session session,
 MIXIT_API mixit_result MIXIT_CALL mixit_session_get_input_stats(mixit_session session, uint32_t input_id,
                                                                  mixit_input_stats* out_stats) {
     constexpr const char* fn = "mixit_session_get_input_stats";
-    if (!struct_size_ok(out_stats)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_stats NULL or struct_size too small");
+    // Callers built against API 0.2 pass the shorter struct; the appended
+    // fields are simply not written for them.
+    if (out_stats == nullptr || out_stats->struct_size < kInputStatsV02Size) {
+        return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_stats NULL or struct_size too small");
+    }
     return guarded(fn, [&]() -> mixit_result {
         const auto s = resolve(session);
         if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
@@ -199,7 +233,11 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_get_input_stats(mixit_session se
         o.av_sync_events = st.av_sync_events;
         o.av_offset_last_ns = st.av_offset_last_ns;
         o.av_offset_max_abs_ns = st.av_offset_max_abs_ns;
-        write_out(out_stats, o);
+        o.decode_errors = st.decode_errors;
+        o.loops = st.loops;
+        const std::uint32_t caller_size = out_stats->struct_size;
+        std::memcpy(out_stats, &o, std::min<std::size_t>(caller_size, sizeof(o)));
+        out_stats->struct_size = caller_size;
         return MIXIT_OK;
     });
 }

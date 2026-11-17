@@ -7,6 +7,7 @@
 #include <system_error>
 
 #include "logging/logger.hpp"
+#include "media/test_signal_source.hpp"
 #include "platform/os.hpp"
 #include "util/clock.hpp"
 
@@ -17,7 +18,8 @@ constexpr std::uint32_t kInputVideoQueue = 4;
 // queue + pending + current + program queue (2) + reader cache + margin
 constexpr std::uint32_t kInputVideoPool = kInputVideoQueue + 8;
 constexpr std::uint32_t kInputAudioQueue = 32;  // 320 ms of 10 ms blocks
-constexpr std::uint32_t kInputAudioPool = kInputAudioQueue + 4;
+// queue + file read-ahead (24) + margin
+constexpr std::uint32_t kInputAudioPool = kInputAudioQueue + 32;
 constexpr std::uint32_t kDefaultProgramPool = 8;
 constexpr std::int64_t kAvMatchWindowNs = 100'000'000;
 constexpr std::int64_t kFlashExpiryNs = 500'000'000;
@@ -34,6 +36,22 @@ void atomic_max(std::atomic<std::int64_t>& target, std::int64_t value) noexcept 
     std::int64_t cur = target.load(std::memory_order_relaxed);
     while (value > cur && !target.compare_exchange_weak(cur, value, std::memory_order_relaxed)) {
     }
+}
+
+// Recognises the test signal's flash band from pixels, so A/V alignment can
+// be measured for any source carrying the test signal (files, or a camera /
+// capture card pointed at a screen showing it), not only synthetic inputs.
+// Samples 8 points across the band; normal pictures rarely have a uniformly
+// near-white bottom edge, and a false flash only expires unmatched.
+bool looks_like_flash(const VideoFrame& f) noexcept {
+    if (f.width < 16 || f.height < 16) return false;
+    const std::uint32_t y = f.height - f.height / 16;
+    const std::uint8_t* row = f.data + static_cast<std::size_t>(y) * f.stride;
+    for (std::uint32_t i = 0; i < 8; ++i) {
+        const std::uint8_t* px = row + static_cast<std::size_t>((f.width * (2 * i + 1)) / 16) * 4;
+        if (px[0] < 230 || px[1] < 230 || px[2] < 230) return false;
+    }
+    return true;
 }
 
 void scale_nearest(const VideoFrame& src, VideoFrame& dst) noexcept {
@@ -53,7 +71,7 @@ void scale_nearest(const VideoFrame& src, VideoFrame& dst) noexcept {
 
 struct Session::Input {
     std::uint32_t id = 0;
-    TestSignal signal;
+    std::unique_ptr<MediaSource> source;
 
     // Pools first: destroyed last (queues and refs below hold their items).
     VideoFramePool video_pool;
@@ -62,10 +80,7 @@ struct Session::Input {
     MediaQueue<AudioRef> audio_queue{kInputAudioQueue, OverflowPolicy::DropNewest};
 
     std::thread producer;
-
-    // Producer-thread counters.
-    std::atomic<std::uint64_t> frames_produced{0}, frames_pool_exhausted{0}, producer_late_skips{0};
-    std::atomic<std::uint64_t> audio_blocks_produced{0};
+    SourceCounters counters;  // written by the source thread
 
     // Output-thread state (only touched by the output thread while running).
     VideoRef pending;
@@ -78,11 +93,12 @@ struct Session::Input {
     std::atomic<std::uint64_t> audio_blocks_consumed{0}, av_sync_events{0};
     std::atomic<std::int64_t> av_offset_last_ns{0}, av_offset_max_abs_ns{0};
 
-    Input(std::uint32_t input_id, const TestSignalConfig& cfg)
+    Input(std::uint32_t input_id, std::unique_ptr<MediaSource> src, const SessionConfig& session)
         : id(input_id),
-          signal(cfg),
-          video_pool(cfg.width, cfg.height, kInputVideoPool),
-          audio_pool(cfg.channels, cfg.sample_rate / 100, cfg.sample_rate, kInputAudioPool) {}
+          source(std::move(src)),
+          video_pool(std::max<std::uint32_t>(2, source->format().width), std::max<std::uint32_t>(2, source->format().height),
+                     kInputVideoPool),
+          audio_pool(session.channels, session.sample_rate / 100, session.sample_rate, kInputAudioPool) {}
 
     void reset_runtime_state() noexcept {
         pending.reset();
@@ -146,18 +162,43 @@ Status Session::add_test_source(TestSignalConfig cfg, std::uint32_t& out_input_i
     if (!is_supported_frame_rate(cfg.frame_rate)) {
         return {MIXIT_E_NOT_SUPPORTED, "unsupported test source frame rate " + rate_text(cfg.frame_rate)};
     }
-    cfg.sample_rate = config_.sample_rate;  // no sample-rate conversion before M4
+    cfg.sample_rate = config_.sample_rate;  // generated directly at the session format
     cfg.channels = config_.channels;
     if (cfg.tone_hz >= cfg.sample_rate / 2) return {MIXIT_E_INVALID_ARGUMENT, "tone frequency must be below Nyquist"};
     if (cfg.flash_interval_frames > 100000) return {MIXIT_E_INVALID_ARGUMENT, "flash interval too large"};
-    if (next_input_id_ > 255) return {MIXIT_E_NOT_SUPPORTED, "input id space exhausted for this session"};
 
-    const std::uint32_t id = next_input_id_++;
+    const std::uint32_t id = next_input_id_;
     cfg.source_id = id;
-    inputs_.push_back(std::make_unique<Input>(id, cfg));
-    out_input_id = id;
+    auto source = std::make_unique<TestSignalSource>(cfg);
+    if (Status st2 = add_input_locked(std::move(source), out_input_id); !st2.is_ok()) return st2;
     logger_.logf(MIXIT_LOG_INFO, "session", "input {} added: test signal {}x{} @ {} fps, tone {} Hz, flash every {} frames",
                  id, cfg.width, cfg.height, rate_text(cfg.frame_rate), cfg.tone_hz, cfg.flash_interval_frames);
+    return Status::ok();
+}
+
+Status Session::add_source(std::unique_ptr<MediaSource> source, std::uint32_t& out_input_id) {
+    if (!source) return {MIXIT_E_INVALID_ARGUMENT, "source is null"};
+    std::lock_guard lock(control_mutex_);
+    const SessionState st = state();
+    if (st == SessionState::Running || st == SessionState::Closed) {
+        return {MIXIT_E_INVALID_STATE, "inputs can only be added while the session is not running"};
+    }
+    const SourceFormat& f = source->format();
+    if (!f.has_video && !f.has_audio) return {MIXIT_E_INVALID_ARGUMENT, "source has neither video nor audio"};
+    if (f.has_video && (f.width == 0 || f.height == 0 || f.width > 8192 || f.height > 8192)) {
+        return {MIXIT_E_NOT_SUPPORTED, "source video size outside 1..8192"};
+    }
+    const std::string description = f.description;
+    if (Status st2 = add_input_locked(std::move(source), out_input_id); !st2.is_ok()) return st2;
+    logger_.logf(MIXIT_LOG_INFO, "session", "input {} added: {}", out_input_id, description);
+    return Status::ok();
+}
+
+Status Session::add_input_locked(std::unique_ptr<MediaSource> source, std::uint32_t& out_input_id) {
+    if (next_input_id_ > 255) return {MIXIT_E_NOT_SUPPORTED, "input id space exhausted for this session"};
+    const std::uint32_t id = next_input_id_++;
+    inputs_.push_back(std::make_unique<Input>(id, std::move(source), config_));
+    out_input_id = id;
     return Status::ok();
 }
 
@@ -264,49 +305,9 @@ void Session::close() noexcept {
 
 void Session::producer_loop(Input& in) noexcept {
     os::set_current_thread_name("mixit-src");
-    const TestSignalConfig& cfg = in.signal.config();
-    const Rate sample_rate{cfg.sample_rate, 1};
-    const std::uint32_t block = cfg.sample_rate / 100;
-    std::int64_t next_frame = 0;
-    std::int64_t next_sample = 0;
-
-    while (!stop_requested_.load(std::memory_order_acquire)) {
-        // A frame is "captured" at its start time; an audio block once its last sample is.
-        const std::int64_t video_due = origin_ns_ + time_of_index(next_frame, cfg.frame_rate);
-        const std::int64_t audio_due = origin_ns_ + time_of_index(next_sample + block, sample_rate);
-        os::sleep_until_monotonic_ns(static_cast<std::uint64_t>(std::min(video_due, audio_due)));
-        if (stop_requested_.load(std::memory_order_acquire)) break;
-        const auto now = static_cast<std::int64_t>(monotonic_ns());
-
-        if (video_due <= now) {
-            // Fell more than two frames behind: jump to the present (a real
-            // capture device would have lost those frames too).
-            const std::int64_t current_index = index_at_time(now - origin_ns_, cfg.frame_rate);
-            if (current_index - next_frame > 2) {
-                in.producer_late_skips.fetch_add(static_cast<std::uint64_t>(current_index - next_frame),
-                                                 std::memory_order_relaxed);
-                next_frame = current_index;
-            }
-            VideoRef frame = in.video_pool.acquire();
-            if (frame) {
-                in.signal.render_video(*frame, next_frame, origin_ns_);
-                in.frames_produced.fetch_add(1, std::memory_order_relaxed);
-                (void)in.video_queue.push(std::move(frame));
-            } else {
-                in.frames_pool_exhausted.fetch_add(1, std::memory_order_relaxed);
-            }
-            ++next_frame;
-        }
-        if (audio_due <= now) {
-            AudioRef blk = in.audio_pool.acquire();
-            if (blk) {
-                in.signal.render_audio(*blk, next_sample, block, origin_ns_);
-                in.audio_blocks_produced.fetch_add(1, std::memory_order_relaxed);
-                (void)in.audio_queue.push(std::move(blk));  // DropNewest: counted by the queue
-            }
-            next_sample += block;  // audio timeline never skips: gaps would break sync
-        }
-    }
+    SourceIo io(in.video_pool, in.audio_pool, in.video_queue, in.audio_queue, in.counters, stop_requested_, origin_ns_,
+                config_.sample_rate, config_.channels, config_.sample_rate / 100);
+    in.source->run(io);
 }
 
 void Session::sync_input(Input& in, std::int64_t target_ns) noexcept {
@@ -314,7 +315,7 @@ void Session::sync_input(Input& in, std::int64_t target_ns) noexcept {
     for (;;) {
         if (!in.pending && !in.video_queue.pop(in.pending)) break;
         if (in.pending->pts_ns > target_ns) break;  // too new: keep for a later tick
-        if (in.pending->flags & kFrameFlagSyncFlash) {
+        if ((in.pending->flags & kFrameFlagSyncFlash) || looks_like_flash(*in.pending)) {
             in.flash_valid = true;
             in.flash_pts = in.pending->pts_ns;
         }
@@ -455,14 +456,16 @@ Status Session::input_stats(std::uint32_t input_id, InputStats& out) const {
     const Input* in = find_input(input_id);
     if (in == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(input_id)};
     out.input_id = in->id;
-    out.frames_produced = in->frames_produced.load();
+    out.frames_produced = in->counters.frames_produced.load();
     out.frames_dropped = in->video_queue.stats().dropped;
-    out.frames_pool_exhausted = in->frames_pool_exhausted.load();
+    out.frames_pool_exhausted = in->counters.frames_pool_exhausted.load();
     out.frames_presented = in->frames_presented.load();
     out.frames_repeated = in->frames_repeated.load();
     out.frames_skipped = in->frames_skipped.load();
-    out.producer_late_skips = in->producer_late_skips.load();
-    out.audio_blocks_produced = in->audio_blocks_produced.load();
+    out.producer_late_skips = in->counters.producer_late_skips.load();
+    out.audio_blocks_produced = in->counters.audio_blocks_produced.load();
+    out.decode_errors = in->counters.decode_errors.load();
+    out.loops = in->counters.loops.load();
     out.audio_blocks_dropped = in->audio_queue.stats().dropped;
     out.audio_blocks_consumed = in->audio_blocks_consumed.load();
     out.av_sync_events = in->av_sync_events.load();

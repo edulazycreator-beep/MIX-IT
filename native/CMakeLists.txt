@@ -15,8 +15,10 @@ set(MIXIT_CORE_SOURCES
     src/logging/json.cpp
     src/logging/logger.cpp
     src/media/ffmpeg_library.cpp
+    src/media/file_source.cpp
     src/media/session.cpp
     src/media/test_signal.cpp
+    src/media/test_signal_source.cpp
     src/media/time_base.cpp
     src/platform/cpuid.cpp
 )

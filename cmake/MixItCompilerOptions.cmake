@@ -8,6 +8,8 @@ function(mixit_apply_compiler_options target)
             # C4324 "structure was padded due to alignment specifier": the padding
             # is intentional (cache-line separation of hot atomics in lock-free queues).
             /wd4324
+            # Third-party (SYSTEM) headers such as FFmpeg's are compiled without warnings.
+            /external:W0
             $<$<BOOL:${MIXIT_WARNINGS_AS_ERRORS}>:/WX>)
         target_compile_definitions(${target} PRIVATE
             WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 UNICODE _UNICODE)
