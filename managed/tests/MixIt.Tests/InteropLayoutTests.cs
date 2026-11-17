@@ -27,6 +27,7 @@ public class InteropLayoutTests
         Assert.Equal(NativeStructSizes.MediaLibraryInfo, Unsafe.SizeOf<MixitMediaLibraryInfo>());
         Assert.Equal(NativeStructSizes.CodecInfo, Unsafe.SizeOf<MixitCodecInfo>());
         Assert.Equal(NativeStructSizes.FileSourceConfig, Unsafe.SizeOf<MixitFileSourceConfig>());
+        Assert.Equal(NativeStructSizes.LayerConfig, Unsafe.SizeOf<MixitLayerConfig>());
     }
 
     [Fact]
@@ -43,6 +44,9 @@ public class InteropLayoutTests
         Assert.Equal(32, (int)Marshal.OffsetOf<MixitGpuAdapterInfo>(nameof(MixitGpuAdapterInfo.Description)));
         Assert.Equal(16, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.Ticks)));
         Assert.Equal(88, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.VideoLatencyMaxNs)));
+        Assert.Equal(96, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.PreviewInputId)));
+        Assert.Equal(112, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.TransitionsCompleted)));
+        Assert.Equal(40, (int)Marshal.OffsetOf<MixitLayerConfig>(nameof(MixitLayerConfig.Opacity)));
         Assert.Equal(8, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.FramesProduced)));
         Assert.Equal(104, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.AvOffsetMaxAbsNs)));
         Assert.Equal(112, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.DecodeErrors)));

@@ -29,25 +29,36 @@ internal static class SessionSoak
             })
             : session.AddFileSource(file, loop: true);
         session.SetProgramInput(main);
+        session.SetPreviewInput(second);
+        // Picture-in-picture of input 2 on program for the whole run: exercises
+        // the compositor on every tick (worst case for the CPU path).
+        session.SetLayer(VideoBus.Program, 0, new LayerSettings
+        {
+            InputId = second, Destination = new NormalizedRect(0.65f, 0.05f, 0.3f, 0.3f), Opacity = 0.9f,
+        });
+        uint transitionFrames = (uint)Math.Max(1, Math.Round(format.FrameRate.Value));  // 1 s
 
         Console.WriteLine($"Session soak: {format.Width}x{format.Height} @ {format.FrameRate} fps for {seconds} s " +
                           (file is null ? $"(input {main}: same format + sync flash; input {second}: half size @ 25 fps)"
                                         : $"(input {main}: same format + sync flash; input {second}: file '{file}', looping)"));
-        Console.WriteLine("   t  ticks  late  black  latency(ms)  in1 drop/rep/skip  in2 rep/skip  A/V max(us)");
+        Console.WriteLine("Sequence: PiP layer throughout; preview watched every second; mix to input 2 at T/2, cut back at T/2+2.");
+        Console.WriteLine("   t  ticks  late  black  latency(ms)  in1 drop/rep/skip  in2 rep/skip  A/V max(us)  pgm composited");
 
+        var previewBuffer = new byte[checked((int)(format.Width * format.Height * 4))];
         session.Start();
         var clock = Stopwatch.StartNew();
         for (int t = 1; t <= seconds; t++)
         {
             Thread.Sleep(TimeSpan.FromSeconds(t) - clock.Elapsed);
-            if (t == seconds / 2) session.SetProgramInput(second);       // cut
-            if (t == seconds / 2 + 1) session.SetProgramInput(main);     // and back
+            if (t == seconds / 2) session.StartTransition(TransitionKind.Mix, transitionFrames);
+            if (t == seconds / 2 + 2) session.Cut();                     // and back
+            _ = session.TryCopyBusFrame(VideoBus.Preview, previewBuffer, (int)format.Width * 4);
             SessionStatistics s = session.GetStatistics();
             InputStatistics a = session.GetInputStatistics(main);
             InputStatistics b = session.GetInputStatistics(second);
             Console.WriteLine($"{t,4} {s.Ticks,6} {s.LateTicks,5} {s.ProgramBlackFrames,6} {s.VideoLatencyLast.TotalMilliseconds,12:0.0}" +
                               $"  {a.FramesDropped,6}/{a.FramesRepeated}/{a.FramesSkipped,-6} {b.FramesRepeated,6}/{b.FramesSkipped,-5}" +
-                              $" {a.AvOffsetMaxAbsNanoseconds / 1000.0,10:0.0}");
+                              $" {a.AvOffsetMaxAbsNanoseconds / 1000.0,10:0.0}   {s.ProgramInputId,3} {s.CompositedFrames,10}");
         }
         session.Stop();
 
@@ -73,6 +84,9 @@ internal static class SessionSoak
         Console.WriteLine($"input {second}: produced {fb.FramesProduced}, presented {fb.FramesPresented}, repeated {fb.FramesRepeated}, " +
                           $"decode errors {fb.DecodeErrors}, loops {fb.Loops}");
         if (fb.DecodeErrors > 0) failures.Add($"{fb.DecodeErrors} decode errors on input {second}");
+        Console.WriteLine($"compositor {fs.Compositor}: composited {fs.CompositedFrames} frames, transitions completed {fs.TransitionsCompleted}");
+        if (seconds >= 4 && fs.TransitionsCompleted != 2) failures.Add($"{fs.TransitionsCompleted} transitions completed, expected 2");
+        if (fs.ProgramInputId != main) failures.Add($"program ended on input {fs.ProgramInputId}, expected {main}");
         if (failures.Count == 0)
         {
             Console.WriteLine("RESULT: PASS");

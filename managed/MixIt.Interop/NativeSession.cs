@@ -65,7 +65,60 @@ public readonly record struct SessionStatistics(
     ulong ProgramFramesDropped,
     ulong ProgramPoolExhausted,
     TimeSpan VideoLatencyLast,
-    TimeSpan VideoLatencyMax);
+    TimeSpan VideoLatencyMax,
+    uint PreviewInputId,
+    TransitionKind? ActiveTransition,
+    float TransitionProgress,
+    CompositorKind Compositor,
+    ulong TransitionsCompleted,
+    ulong CompositedFrames);
+
+/// <summary>Video bus (mirrors MIXIT_BUS_*).</summary>
+public enum VideoBus
+{
+    Program = 0,
+    Preview = 1,
+}
+
+/// <summary>Transition between preview and program (mirrors MIXIT_TRANSITION_*).</summary>
+public enum TransitionKind
+{
+    Cut = 0,
+    /// <summary>Cross dissolve.</summary>
+    Mix = 1,
+    /// <summary>Fade through black.</summary>
+    Fade = 2,
+    /// <summary>Left-to-right wipe.</summary>
+    Wipe = 3,
+}
+
+/// <summary>Compositor implementation in use (mirrors MIXIT_COMPOSITOR_*).</summary>
+public enum CompositorKind
+{
+    Cpu = 0,
+    Direct3D11 = 1,
+}
+
+/// <summary>A rectangle in normalized (0..1) frame coordinates.</summary>
+public readonly record struct NormalizedRect(float X, float Y, float Width, float Height)
+{
+    public static NormalizedRect Full => new(0, 0, 1, 1);
+}
+
+/// <summary>
+/// An overlay layer drawn on top of a bus's base input (picture-in-picture,
+/// crops, partially transparent overlays).
+/// </summary>
+public sealed record LayerSettings
+{
+    public required uint InputId { get; init; }
+    /// <summary>Region of the source to use.</summary>
+    public NormalizedRect Crop { get; init; } = NormalizedRect.Full;
+    /// <summary>Where the cropped source is drawn on the output (stretched to fit).</summary>
+    public NormalizedRect Destination { get; init; } = NormalizedRect.Full;
+    /// <summary>0..1, multiplied with the source alpha.</summary>
+    public float Opacity { get; init; } = 1.0f;
+}
 
 /// <summary>Per-input counters, including A/V alignment of the test signal.</summary>
 public readonly record struct InputStatistics(
@@ -162,6 +215,47 @@ public sealed unsafe class NativeSession : IDisposable
     public void SetProgramInput(uint inputId) =>
         Check(NativeMethods.mixit_session_set_program_input(_handle, inputId), "mixit_session_set_program_input");
 
+    /// <summary>Selects the preview input (0 = black).</summary>
+    public void SetPreviewInput(uint inputId) =>
+        Check(NativeMethods.mixit_session_set_preview_input(_handle, inputId), "mixit_session_set_preview_input");
+
+    /// <summary>Swaps preview and program at the next tick; completes a running transition.</summary>
+    public void Cut() => Check(NativeMethods.mixit_session_cut(_handle), "mixit_session_cut");
+
+    /// <summary>
+    /// Transitions program to preview over <paramref name="durationFrames"/>
+    /// output frames (1..600), then swaps the buses. While stopped the swap
+    /// happens immediately. Throws with <see cref="NativeResult.InvalidState"/>
+    /// if a transition is already running.
+    /// </summary>
+    public void StartTransition(TransitionKind kind, uint durationFrames) =>
+        Check(NativeMethods.mixit_session_start_transition(_handle, (int)kind, durationFrames),
+            "mixit_session_start_transition");
+
+    /// <summary>Sets overlay layer <paramref name="index"/> (0..7) of a bus.</summary>
+    public void SetLayer(VideoBus bus, uint index, LayerSettings layer)
+    {
+        ArgumentNullException.ThrowIfNull(layer);
+        var c = new MixitLayerConfig
+        {
+            StructSize = (uint)sizeof(MixitLayerConfig),
+            InputId = layer.InputId,
+            CropX = layer.Crop.X,
+            CropY = layer.Crop.Y,
+            CropW = layer.Crop.Width,
+            CropH = layer.Crop.Height,
+            DestX = layer.Destination.X,
+            DestY = layer.Destination.Y,
+            DestW = layer.Destination.Width,
+            DestH = layer.Destination.Height,
+            Opacity = layer.Opacity,
+        };
+        Check(NativeMethods.mixit_session_set_layer(_handle, (int)bus, index, &c), "mixit_session_set_layer");
+    }
+
+    /// <summary>Removes overlay layer <paramref name="index"/> of a bus.</summary>
+    public void ClearLayer(VideoBus bus, uint index) => SetLayer(bus, index, new LayerSettings { InputId = 0 });
+
     /// <summary>Starts production (idempotent).</summary>
     public void Start() => Check(NativeMethods.mixit_session_start(_handle), "mixit_session_start");
 
@@ -176,7 +270,9 @@ public sealed unsafe class NativeSession : IDisposable
         Check(NativeMethods.mixit_session_get_stats(_handle, &s), "mixit_session_get_stats");
         return new SessionStatistics((SessionState)s.State, (int)s.InputCount, s.ProgramInputId, s.Ticks, s.LateTicks,
             s.SkippedTicks, FromNs(s.MaxTickLatenessNs), s.ProgramFrames, s.ProgramBlackFrames, s.ProgramFramesDropped,
-            s.ProgramPoolExhausted, FromNs(s.VideoLatencyLastNs), FromNs(s.VideoLatencyMaxNs));
+            s.ProgramPoolExhausted, FromNs(s.VideoLatencyLastNs), FromNs(s.VideoLatencyMaxNs), s.PreviewInputId,
+            s.TransitionActive < 0 ? null : (TransitionKind)s.TransitionActive, s.TransitionProgress,
+            (CompositorKind)s.Compositor, s.TransitionsCompleted, s.CompositedFrames);
     }
 
     /// <summary>Counters of one input.</summary>
@@ -197,7 +293,15 @@ public sealed unsafe class NativeSession : IDisposable
     /// program frame exists yet (or the session is stopped).
     /// </summary>
     /// <exception cref="MixItNativeException">Buffer too small (Result = BufferTooSmall) or invalid stride.</exception>
-    public ProgramFrameInfo? TryCopyProgramFrame(Span<byte> destination, int stride)
+    public ProgramFrameInfo? TryCopyProgramFrame(Span<byte> destination, int stride) =>
+        TryCopyBusFrame(VideoBus.Program, destination, stride);
+
+    /// <summary>
+    /// Copies the latest frame of a bus (BGRA8). Preview is rendered on demand:
+    /// the first request after a pause returns null until the next tick.
+    /// Returns null if no frame exists yet (or the session is stopped).
+    /// </summary>
+    public ProgramFrameInfo? TryCopyBusFrame(VideoBus bus, Span<byte> destination, int stride)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(stride);
         MixitVideoFrameInfo info = default;
@@ -205,22 +309,25 @@ public sealed unsafe class NativeSession : IDisposable
         NativeResult r;
         fixed (byte* p = destination)
         {
-            r = NativeMethods.mixit_session_copy_program_frame(_handle, destination.IsEmpty ? null : p,
+            r = NativeMethods.mixit_session_copy_bus_frame(_handle, (int)bus, destination.IsEmpty ? null : p,
                 (uint)destination.Length, (uint)stride, &info);
         }
         if (r == NativeResult.NotFound) return null;
-        Check(r, "mixit_session_copy_program_frame");
+        Check(r, "mixit_session_copy_bus_frame");
         return ToInfo(info);
     }
 
     /// <summary>Size of the current program frame without copying it; null if none yet.</summary>
-    public (int Width, int Height)? GetProgramFrameSize()
+    public (int Width, int Height)? GetProgramFrameSize() => GetBusFrameSize(VideoBus.Program);
+
+    /// <summary>Size of the current frame of a bus without copying it; null if none yet.</summary>
+    public (int Width, int Height)? GetBusFrameSize(VideoBus bus)
     {
         MixitVideoFrameInfo info = default;
         info.StructSize = (uint)sizeof(MixitVideoFrameInfo);
-        NativeResult r = NativeMethods.mixit_session_copy_program_frame(_handle, null, 0, 0, &info);
+        NativeResult r = NativeMethods.mixit_session_copy_bus_frame(_handle, (int)bus, null, 0, 0, &info);
         if (r == NativeResult.NotFound) return null;
-        if (r != NativeResult.BufferTooSmall) Check(r, "mixit_session_copy_program_frame");
+        if (r != NativeResult.BufferTooSmall) Check(r, "mixit_session_copy_bus_frame");
         return ((int)info.Width, (int)info.Height);
     }
 

@@ -113,6 +113,29 @@ internal struct MixitSessionStats
     public ulong ProgramPoolExhausted;
     public long VideoLatencyLastNs;
     public long VideoLatencyMaxNs;
+    public uint PreviewInputId;          // API 0.3
+    public int TransitionActive;         // API 0.3: MIXIT_TRANSITION_* or -1
+    public float TransitionProgress;     // API 0.3
+    public int Compositor;               // API 0.3: MIXIT_COMPOSITOR_*
+    public ulong TransitionsCompleted;   // API 0.3
+    public ulong CompositedFrames;       // API 0.3
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixitLayerConfig
+{
+    public uint StructSize;
+    public uint InputId;
+    public float CropX;
+    public float CropY;
+    public float CropW;
+    public float CropH;
+    public float DestX;
+    public float DestY;
+    public float DestW;
+    public float DestH;
+    public float Opacity;
+    public uint Reserved;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -191,7 +214,8 @@ internal static class NativeStructSizes
     public const int GpuAdapterInfo = 160;
     public const int SessionConfig = 32;
     public const int TestSourceConfig = 32;
-    public const int SessionStats = 96;
+    public const int SessionStats = 128;
+    public const int LayerConfig = 48;
     public const int InputStats = 128;
     public const int FileSourceConfig = 16;
     public const int VideoFrameInfo = 56;

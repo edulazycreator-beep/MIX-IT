@@ -126,6 +126,29 @@ internal static unsafe partial class NativeMethods
     public static partial NativeResult mixit_session_copy_program_frame(SessionHandle session, byte* buffer, uint bufferSize,
         uint stride, MixitVideoFrameInfo* info);
 
+    // ---- buses, transitions and layers (API 0.3)
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_preview_input(SessionHandle session, uint inputId);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_cut(SessionHandle session);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_start_transition(SessionHandle session, int kind, uint durationFrames);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_layer(SessionHandle session, int bus, uint index, MixitLayerConfig* layer);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_copy_bus_frame(SessionHandle session, int bus, byte* buffer, uint bufferSize,
+        uint stride, MixitVideoFrameInfo* info);
+
     // ---- media library (API 0.2)
 
     [LibraryImport(LibraryName)]

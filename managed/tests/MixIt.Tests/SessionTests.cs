@@ -113,4 +113,53 @@ public class SessionTests
         Assert.Equal("25", MediaRate.Fps25.ToString());
         Assert.InRange(MediaRate.Fps59_94.Value, 59.94, 59.941);
     }
+
+    [Fact]
+    public void PreviewCutTransitionAndLayers()
+    {
+        using var engine = NativeEngine.Create(new NativeEngineOptions());
+        using NativeSession session = engine.CreateSession(Small);
+        var source = new TestSourceOptions { Width = 640, Height = 360, FrameRate = MediaRate.Fps30 };
+        uint a = session.AddTestSource(source);
+        uint b = session.AddTestSource(source);
+        session.SetProgramInput(a);
+        session.SetPreviewInput(b);
+        session.SetLayer(VideoBus.Program, 0, new LayerSettings
+        {
+            InputId = b, Destination = new NormalizedRect(0.5f, 0.5f, 0.5f, 0.5f), Opacity = 0.75f,
+        });
+        session.Start();
+
+        var buffer = new byte[640 * 360 * 4];
+        ProgramFrameInfo? preview = null;
+        for (int i = 0; i < 25 && preview is null; i++)
+        {
+            Thread.Sleep(40);
+            preview = session.TryCopyBusFrame(VideoBus.Preview, buffer, 640 * 4);
+        }
+        Assert.NotNull(preview);
+        Assert.Equal(b, preview.Value.InputId);
+        Assert.Equal(a, session.TryCopyProgramFrame(buffer, 640 * 4)?.InputId);
+
+        session.Cut();
+        Thread.Sleep(150);
+        SessionStatistics s = session.GetStatistics();
+        Assert.Equal(b, s.ProgramInputId);
+        Assert.Equal(a, s.PreviewInputId);
+        Assert.Equal(CompositorKind.Cpu, s.Compositor);
+        Assert.True(s.CompositedFrames > 0, "the PiP layer is composited");
+
+        session.StartTransition(TransitionKind.Mix, 15);
+        Assert.Equal(NativeResult.InvalidState,
+            Assert.Throws<MixItNativeException>(() => session.StartTransition(TransitionKind.Wipe, 15)).Result);
+        Thread.Sleep(900);
+        s = session.GetStatistics();
+        Assert.Null(s.ActiveTransition);
+        Assert.Equal(a, s.ProgramInputId);
+        Assert.Equal(2UL, s.TransitionsCompleted);
+
+        Assert.Equal(NativeResult.InvalidArgument,
+            Assert.Throws<MixItNativeException>(() => session.SetLayer(VideoBus.Program, 8, new LayerSettings { InputId = a })).Result);
+        session.ClearLayer(VideoBus.Program, 0);
+    }
 }
