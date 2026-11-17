@@ -41,13 +41,14 @@ _Last updated: 2026-11-17 (first GitHub Actions run)_
 | NuGet versions in `Directory.Packages.props` | ✅ resolved |
 | DXGI enumeration on real Windows | ✅ 2 adapters (Microsoft Basic Render Driver; no GPU on runner) |
 | `mixit-probe` on Windows | ✅ |
+| Packaged self-contained `MixIt.exe` starts, opens its window, engine logs (smoke test) | ✅ artifact `MixIt-win-x64-<sha>` per CI run |
 | Linux: Debug, ASan+UBSan, TSan, MinGW cross-check, xUnit | ✅ |
 
 ## Still unverified
 
 | Item | Action |
 |---|---|
-| Running the WPF app interactively | launch `MixIt.exe` on a Windows desktop |
+| Hands-on use of the WPF app (layout, DPI, interaction) | download the CI artifact and run `MixIt.exe` |
 | DXGI / timing on real GPU hardware | `mixit-probe --codecs` and `--session-test 3600 --format 1920x1080@60000/1001` on a workstation |
 | FFmpeg on Windows (LGPL build) | ADR-0004 step 5, then CI with `FFMPEG_ROOT` |
 
