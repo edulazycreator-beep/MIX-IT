@@ -4,22 +4,23 @@
 Hybrid architecture: a native C++20 media engine behind a versioned C ABI, and a
 .NET 10 / WPF operator application.
 
-> **Status: Milestone 2 (Media pipeline foundation).** Engine foundation, C ABI
-> 0.2, interop, logging, capability detection, and a CPU reference media
-> pipeline (exact time base, pooled buffers, bounded queues, synthetic A/V test
-> signal, frame synchronization, program bus with cuts, A/V alignment
-> measurement, FFmpeg with an LGPL licence guard) are implemented and tested on
-> a Linux development host, incl. sanitizers and the Windows build under Wine.
-> **Windows/MSVC verification is pending.** No camera/file inputs, GPU
-> rendering, audio mixing, streaming or recording yet — see
-> [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md).
+> **Status: Milestone 3 (first working video pipeline) implemented.** The
+> Production Studio runs a real video pipeline: test-signal, media-file
+> (FFmpeg) and — experimentally — webcam/capture-card inputs, preview/program
+> monitors with tally, CUT, AUTO (mix, fade, wipe), picture-in-picture and 8
+> layers per bus, on a CPU compositor (Direct3D 11 compositor experimental).
+> Built and tested on Linux and on Windows CI (MSVC, WPF, LGPL FFmpeg); not yet
+> run by hand on Windows hardware or with real capture devices. **No audio
+> mixing, streaming or recording yet** — nothing is broadcast. See
+> [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) and
+> [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md).
 
 ## Quick start (Windows)
 
 ```powershell
 ./scripts/build-windows.ps1
 dotnet run --project managed/MixIt.Probe -- --verbose   # hardware report
-dotnet run --project managed/MixIt.Desktop              # operator app
+dotnet run --project managed/MixIt.Desktop              # operator app (Production Studio)
 ```
 
 Prerequisites and Linux instructions: [docs/BUILD_GUIDE.md](docs/BUILD_GUIDE.md).
@@ -30,7 +31,7 @@ Prerequisites and Linux instructions: [docs/BUILD_GUIDE.md](docs/BUILD_GUIDE.md)
 |---|---|
 | `native/` | engine (`mixit_engine.dll`), public header `native/include/mixit/mixit_engine.h`, GoogleTest suite |
 | `managed/MixIt.Interop` | the only P/Invoke layer |
-| `managed/MixIt.Core` | application services (engine host, logging bridge) |
+| `managed/MixIt.Core` | application services (engine host, logging bridge, production service) |
 | `managed/MixIt.Probe` | `mixit-probe` hardware diagnostics CLI |
 | `managed/MixIt.Desktop` | WPF application |
 | `managed/tests` | xUnit tests against the real engine |

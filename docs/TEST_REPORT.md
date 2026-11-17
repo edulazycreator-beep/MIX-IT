@@ -1,5 +1,51 @@
 # MIX IT — Test Report
 
+## Run: Milestone 3 (video pipeline) — 2026-11-17
+
+### GitHub Actions — run 44041552714 (commit 1389f21)
+
+| Job | Result |
+|---|---|
+| Windows (MSVC 19.44, .NET 10, LGPL FFmpeg 9.0.2, no GPU) | ✅ native **103/103** — incl. `Compositor.D3D11MatchesTheCpuReference` (WARP), `Buses.GpuCompositorPreferenceRendersOrFallsBack` (D3D11 on WARP), `Capture.EnumerationAndValidation` · solution incl. WPF **0 warnings** · xUnit **37/37** |
+| Windows packaging | ✅ `mixit-probe --session-test 10` PASS (PiP, watched preview, mix + cut, 0 late ticks) · `MixIt.exe` opens its window, engine log OK · **`MixIt.exe --self-test production` PASS** (monitors showed 73/72 distinct frames in ~3 s, 2 transitions, tally correct, composited frames, clean stop) |
+| Linux (GCC 13.3) | ✅ native 103/103 in Debug, ASan+UBSan, TSan (D3D11 test skipped: Windows only) · MinGW cross-check · xUnit 37/37 |
+
+Artifact: `MixIt-win-x64-1389f21…` (132 MB, includes the LGPL FFmpeg DLLs).
+
+### Local (2-core Linux dev host)
+
+| Check | Result |
+|---|---|
+| Native, Debug / Release / ASan+UBSan / TSan (`-j2`, twice for TSan) | ✅ 103/103 each |
+| Full native suite against **FFmpeg 9.0.2** (BtbN Linux LGPL build of the same release as Windows CI) | ✅ 99/99 at commit bdb718a (before the capture tests were added) |
+| MinGW-w64 cross-build incl. D3D11 compositor and Media Foundation capture | ✅ 0 warnings; DLL imports only d3d11/dxgi/kernel32/msvcrt/ole32 (MF resolved at run time) |
+| Managed (xUnit-compatible local runner; nuget.org blocked) | ✅ 37/37 |
+| CPU compositor benchmark, Release, 640×360 → 1920×1080 | 4.85 ms/frame (was 20.2 ms before the separable + banded rewrite); two-scene mix 10.1 ms |
+| `mixit-probe --session-test 10 --format 1920x1080@60` (Release native) | ✅ PASS: 599/600 ticks, 0 late, PiP every tick + preview + mix + cut, 1139 composited frames |
+| same at 1080p29.97 | ✅ PASS: 0 late, max lateness 0.30 ms |
+| same with the Debug native build at 1080p60 | ❌ FAIL (269 late ticks) — expected for an unoptimised build; product builds are Release |
+| `--file` H.264 720p29.97 / 44.1 kHz into a 30 fps session (M3a) | ✅ PASS: 2 loops, 0 decode errors |
+
+### New tests
+
+- Native (28): compositor (fit, black, exact copy, placement/scale/blend, source alpha, crop, transitions, bilinear downscale, **D3D11 vs CPU**), buses (preview/program + cut, auto transition timing and swap, cut completing a transition, transition while stopped, PiP decoded from pixels, layer validation, aspect bars, preview rendered only while watched, GPU preference/fallback, 0.2 config/stats compatibility), file source (7), capture (enumeration/validation), ABI compatibility.
+- Managed (7): production service (full production run with monitors/PiP/transitions, engine restart + format change, missing file, capture listing), preview/cut/transition/layers, GPU preference, file-source error mapping (plus layout checks for every new struct).
+
+### Defects found and fixed
+
+1. **FFmpeg 9 dropped the last MP4 frame** (Windows CI: 44/45). Root cause: the test writer left the last packet's duration at 0, so the MP4 muxer wrote a zero-length last sample excluded by the edit list. Reproduced locally with the same FFmpeg build; the reader was correct.
+2. **Transitions ran long under load**: progress advanced per rendered tick, so skipped ticks stretched the transition. Now advances by elapsed tick indices.
+3. **Null dereference** possible in the zero-copy path when an input vanished (GCC `-Wnull-dereference`, Release only).
+4. Compositor too slow for TSan timing tests (20 ms/frame at 1080p) → separable filter with row caches + band parallelism (4× faster).
+5. D3D11 vs CPU comparison failed (max Δ 20) on test content with wrap-around discontinuities, where sub-texel filter precision differs between rasterizers; test content made smooth and the worst pixel is now reported.
+6. xUnit analyzer (xUnit2013) error in CI — not visible with the local runner.
+
+### Limitations
+
+- No GPU, no capture hardware and no interactive desktop session were available; GPU results are WARP-only, capture is validated only for "no device" paths, and the WPF app was driven by its self-test, not by a person.
+- Monitors poll at 25 Hz (ADR-0006); they skip frames at 50/60 fps by design.
+- The 1080p60 *file* exit criterion needs a Windows workstation run.
+
 ## Run: GitHub Actions — 2026-11-17 (run 44031124025, commit 5516a44)
 
 First execution on real Windows with MSVC and on GitHub-hosted Linux.

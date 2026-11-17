@@ -6,7 +6,7 @@ else is the agreed design that later milestones implement.
 
 ---
 
-## 1. Lifecycle (implemented: steps 1–9; M2 inputs are synthetic)
+## 1. Lifecycle (implemented: steps 1–9)
 
 The ABI lifecycle from the master prompt §20 maps to engine states:
 
@@ -15,8 +15,8 @@ The ABI lifecycle from the master prompt §20 maps to engine states:
 | 1 Initialize | `mixit_engine_create` | `INITIALIZED` | M1 ✅ |
 | 2 Detect capabilities | `mixit_engine_detect_capabilities` | unchanged (cached result) | M1 ✅ (CPU, memory, OS, GPU) |
 | 3 Create session | `mixit_session_create` | session `CONFIGURING` | M2 ✅ |
-| 4 Register inputs | `mixit_session_add_test_source` | | M2 ✅ (synthetic), M3 (real) |
-| 5 Configure outputs | program bus is implicit; `mixit_session_add_output` | | M2 program bus ✅, M3/M5 outputs |
+| 4 Register inputs | `mixit_session_add_test_source` / `_add_file_source` / `_add_capture_source` | | M2 ✅ test signal, M3 ✅ files, M3 🧪 capture |
+| 5 Configure buses/outputs | program + preview buses are implicit; layers via `mixit_session_set_layer`; `mixit_session_add_output` | | M3 ✅ buses, M5 outputs |
 | 6 Start production | `mixit_session_start` | session `RUNNING` | M2 ✅ |
 | 7 Stop production | `mixit_session_stop` | session `STOPPED` | M2 ✅ |
 | 8 Release resources | `mixit_session_destroy` | | M2 ✅ |
@@ -124,7 +124,7 @@ profilers — the logger thread already is.
 | GPU adapters, VRAM | DXGI `EnumAdapters1` ⚠️ | not implemented (flag clear) | M1 |
 | Hardware encoders (NVENC/QSV/AMF) | FFmpeg encoder open-test | — | M2 |
 | Audio devices | WASAPI / ASIO enumeration | — | M4 |
-| Capture devices | Media Foundation, DeckLink, NDI discovery | — | M3 |
+| Capture devices | Media Foundation ✅🧪 (`mixit_enumerate_capture_devices`); DeckLink, NDI discovery later | — | M3 |
 | Network interfaces, storage throughput | `GetAdaptersAddresses`, write benchmark | — | M5 |
 | Live monitoring (CPU/GPU load, frame drops, underruns, disk) | PDH / DXGI / counters | — | M2–M5 |
 
@@ -135,36 +135,62 @@ will be derived from these probes **after** benchmark data exists (M3/M5);
 thresholds are not guessed. Presets are recommendations and are never applied
 automatically during an active production.
 
-## 8. Session pipeline (M2, implemented — CPU reference path)
+## 8. Session pipeline (M2–M3, implemented)
 
 ```
- input thread "mixit-src" (per input)            output thread "mixit-tick"
- ───────────────────────────────────            ──────────────────────────────────────
- paced on source rate (absolute deadlines)       paced on session rate, wake = tick + latency
- render test frame → pool → video queue ──────▶  frame sync (per input) → current frame
- render 10 ms audio → pool → audio queue ─────▶  consume audio, detect clicks, A/V pairing
-                                                 program = selected input's current frame
-                                                   same size → zero copy (shared ref)
-                                                   other size → nearest-neighbour scale
-                                                   none     → pre-filled black frame
-                                                 → program queue (2, drop oldest) → readers
+ input thread "mixit-src" (per input)               output thread "mixit-tick"
+ ──────────────────────────────────                 ─────────────────────────────────────────────
+ MediaSource::run(SourceIo&)                         paced on session rate, wake = tick + latency
+   TestSignalSource  (paced, synthetic)              frame sync per input → current frame (repeat/skip)
+   FileSource        (FFmpeg decode, pts pacing)     consume audio, A/V pairing (flash/click)
+   CaptureSource 🧪  (Media Foundation, arrival)     snapshot program/preview scenes + transition
+ frames → pool → video queue (drop oldest) ─────▶    program: render_bus(A [, B, kind, progress])
+ audio  → pool → audio queue (drop newest) ─────▶      one full-size input, no layers → zero copy
+                                                       otherwise → Compositor (CPU | D3D11)
+                                                     preview: rendered only if read within 1 s
+                                                     → bus queues (2, drop oldest) → readers
 ```
 
+- **Media sources** (`media/media_source.hpp`): a source declares its format
+  (sizes the input's pools) and runs on the input's thread until stop. Contract:
+  timestamps on the master clock, frames pushed no earlier than their pts,
+  audio in fixed blocks on a gap-free sample timeline, never block on the session.
+- **File source** (`media/file_source.cpp`): FFmpeg demux/decode, swscale to
+  BGRA (BT.709/601 matrices), swresample to the session format, pacing by pts,
+  looping with the loop length derived from the audio sample index (no drift;
+  the shorter stream is padded). Only the `file` protocol is allowed.
+- **Capture source** (`media/capture_source_windows.cpp`, ADR-0007): Media
+  Foundation source reader → RGB32, arrival-time stamps, reconnect every second.
+- **Buses and scenes**: each bus has a base input (fitted with letter/pillarbox
+  to the program format) and 8 overlay layers (crop, destination, opacity).
+  `cut` swaps the buses at the next tick; `start_transition` runs Mix / Fade /
+  Wipe over 1–600 output frames, advancing with **output time** (ticks skipped
+  after a stall count, so the duration holds under load), then swaps. Starting
+  a transition while stopped lands on the end state immediately. Scene changes
+  take a short scene mutex; the tick thread copies the scenes and never holds
+  it while rendering.
+- **Compositor** (ADR-0005): `Compositor::render(sceneA, sceneB?, kind,
+  progress, dst)`; CPU reference (banded, separable bilinear) by default,
+  Direct3D 11 EXPERIMENTAL with automatic CPU fallback.
 - Control calls (add/remove/start/stop) take the session control mutex; media
-  threads never do. Inputs change only while stopped; program selection is an
-  atomic, so cuts happen at tick boundaries.
+  threads never do. Inputs change only while stopped.
 - Pacing uses `os::sleep_until_monotonic_ns`: absolute `clock_nanosleep` on
-  Linux, a high-resolution waitable timer (`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`,
-  Windows 10 1803+) on Windows with a `sleep_until` fallback. Executed under
-  Wine; real-hardware timing on Windows is still to be measured.
+  Linux, a high-resolution waitable timer on Windows.
 - The test signal (`media/test_signal`) is a pure function of frame/sample
   index: colour bars, moving stripe, a 40-bit frame code (frame index + source
   id) with a white/black sentinel, flash band on sync frames, −20 dBFS tone and
-  ±0.9 clicks starting on the sample nearest to each flash frame.
+  ±0.9 clicks on the sample nearest to each flash frame. Flash frames are also
+  detected from pixels, so decoded files are measured too.
 
-## 9. GPU pipeline (M3 design)
+## 9. GPU pipeline (status after M3 and next steps)
 
-- One D3D11 device per engine (D3D11.1+, BGRA support, video support flags), created on the adapter chosen from the capability list; D3D12 considered later for specific workloads.
-- Decoded frames stay on the GPU where the decoder supports it (D3D11VA); conversions (NV12/P010 → RGBA, scaling, colour) are shader passes.
-- The compositor renders layers into pooled render targets per bus (program, preview, clean feed, aux); outputs read from those targets. CPU readback only where an output requires it (software encoders, NDI send), through pooled staging textures with fences.
-- Preview/program monitors are DXGI flip-model swap chains owned by native code inside WPF `HwndHost` windows.
+Implemented (EXPERIMENTAL): a D3D11 device per session compositor (hardware or
+WARP), runtime-compiled shaders, per-size upload textures, scene render
+targets, a transition blend pass and staging readback (ADR-0005).
+
+Next steps, in order, each measured against the CPU path with
+`mixit-probe --compositor`:
+- Hardware decode (D3D11VA through FFmpeg) and GPU-side NV12/P010 → RGB conversion, so file frames stay on the GPU.
+- `SceneDraw` layers referencing GPU textures; readback only for outputs that need CPU memory (software encode, NDI send), through pooled staging textures with fences instead of a synchronous map.
+- One shared D3D11 device per engine on the adapter chosen from the capability list.
+- Native flip-model swap-chain monitors in WPF (`HwndHost`) replacing the WriteableBitmap monitors (ADR-0006) — M8.

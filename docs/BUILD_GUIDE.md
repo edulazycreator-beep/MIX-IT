@@ -41,19 +41,35 @@ The engine builds without FFmpeg, but media features need it. On Windows,
 point CMake at a **LGPL shared** FFmpeg build (see ADR-0004):
 
 ```powershell
+# The same pinned LGPL build CI uses (BtbN FFmpeg-Builds, SHA-256 checked; needs the gh CLI):
+./scripts/fetch-ffmpeg-windows.ps1 -Tag autobuild-2026-11-16-15-29 `
+    -Sha256 bc661777e3aeb29cbd9e68f8b29a4ea1b54cc0db0373ff447085e5cb4ef307b3   # sets FFMPEG_ROOT
+# or any LGPL shared build:
 $env:FFMPEG_ROOT = "C:\sdk\ffmpeg-lgpl-shared"   # contains include\, lib\ (*.lib), bin\ (*.dll)
 cmake --preset windows-msvc                         # prints "MIX IT: FFmpeg TRUE"
 ```
 
+Required libraries: avcodec, avformat, avutil, swscale, swresample.
+
 The DLLs are copied next to `mixit_engine.dll`. Windows builds enforce the
 licence policy (`MIXIT_REQUIRE_LGPL_FFMPEG=ON`): a GPL or non-free FFmpeg is
 rejected at runtime. Check with `mixit-probe --codecs`.
+
+Platform libraries (Windows SDK, nothing to install): d3d11, dxgi, ole32,
+mfuuid (GUIDs only). `d3dcompiler_47.dll` and Media Foundation are loaded at
+run time; without them the GPU compositor / capture report NOT_SUPPORTED and
+the engine keeps working.
 
 ### Diagnostics
 
 ```powershell
 dotnet run --project managed/MixIt.Probe -- --codecs                       # FFmpeg + codec availability
 dotnet run --project managed/MixIt.Probe -- --session-test 3600 --format 1920x1080@60000/1001   # 1 h soak, exit 0 = PASS
+dotnet run --project managed/MixIt.Probe -- --session-test 600 --format 1920x1080@60 --file C:\clips\test.mp4   # file input
+dotnet run --project managed/MixIt.Probe -- --session-test 60 --compositor d3d11     # GPU compositor (experimental)
+dotnet run --project managed/MixIt.Probe -- --list-capture                           # webcams / capture cards
+dotnet run --project managed/MixIt.Probe -- --session-test 60 --capture 0            # capture input (experimental)
+MixIt.exe --self-test production    # drives the Production Studio; exit 0 = PASS, verdict in the log
 ```
 
 The managed build looks for the engine in `build/windows-msvc/bin/<Configuration>`.

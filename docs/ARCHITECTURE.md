@@ -20,7 +20,7 @@ MIX IT is a single Windows process with two halves joined by one versioned C ABI
 │            └──────────────┬───────────┴───────────────────────┘            │
 │                    MixIt.Core  — application services                      │
 │        EngineHost · EngineLogStream · NativeEngineLoggerProvider           │
-│        [M3+] Input/Output/Production services · [M7] Automation           │
+│        ProductionService (M3) · [M5+] Output services · [M7] Automation    │
 │        [M9] Licensing · Project store (SQLite + JSON)                      │
 │                           │                                                │
 │                    MixIt.Interop — the ONLY P/Invoke code                  │
@@ -35,7 +35,9 @@ MIX IT is a single Windows process with two halves joined by one versioned C ABI
 │   │                                       audio/capture devices, storage]  │
 │   ├─ Sessions (M2): time base · pools · media queues · test signal ·       │
 │   │   frame sync · program bus · A/V measurement · FFmpeg licence guard   │
-│   ├─ [M3] Video engine: inputs → frame sync → GPU compositor → buses       │
+│   ├─ Video engine (M3): MediaSources (test · file · capture*) → frame      │
+│   │   sync → Compositor (CPU · D3D11*) → preview/program buses, layers,    │
+│   │   cut/transitions                                                      │
 │   ├─ [M4] Audio engine: inputs → mixer/DSP → buses (real-time thread)      │
 │   ├─ [M5] Encoders · Streaming outputs · Recording outputs                 │
 │   ├─ [M6] Graphics · Replay · Multiview · Virtual studio                   │
@@ -161,10 +163,13 @@ Implemented in M1 (✅ verified by tests and the probe):
 | Callbacks | `[UnmanagedCallersOnly]` static function pointer + `GCHandle` user data. Invoked only on the engine's log thread; exceptions are caught and counted; disposing from inside a callback is refused (would self-join). The `GCHandle` is freed only after native destroy has joined the thread. |
 | Versioning | Library and binding both check API version; while major = 0, minor must match exactly. |
 
-Planned for high-rate data (M3/M4): video never crosses the boundary — native
-renders preview/program into DXGI swap chains hosted in WPF via `HwndHost`;
-meters are read as fixed-size snapshot structs polled at UI rate; engine events
-use a bounded native event queue drained on an engine event thread.
+High-rate data: video is copied across the boundary only for monitoring — the
+engine writes a bus frame straight into a WPF `WriteableBitmap` back buffer at
+25 Hz while the Production Studio is visible (ADR-0006). Native DXGI swap
+chains hosted via `HwndHost` replace this once the GPU path is the default
+(M8). Meters (M4) will be fixed-size snapshot structs polled at UI rate;
+engine events will use a bounded native event queue drained on an engine
+event thread.
 
 ## 6. Build system configuration
 
@@ -182,7 +187,7 @@ See [../ROADMAP.md](../ROADMAP.md) for the full list. Near term:
 |---|---|---|
 | **M1 Foundation** | repo, CMake, .NET solution, native lib, C ABI, interop, init/shutdown, logging, errors, capability interface, tests, docs | Native + managed tests green; **MSVC build and Windows run still to be executed** (see DEVELOPMENT_STATUS). |
 | **M2 Media pipeline foundation** (implemented on dev host) | FFmpeg (LGPL, dynamic) init + capability detection of codecs/HW encoders; `MediaSource` abstraction; synthetic video (test pattern + frame counter + timecode burn-in) and audio (tone + clicks synced to frames); frame & audio buffer pools; rational time bases; bounded media queues with policies; diagnostics counters | Synthetic A/V runs for 1 h with measured drift < 1 ms; zero steady-state allocation (instrumented); queues never exceed bounds under overload tests. |
-| **M3 First working video pipeline** | file decode (FFmpeg, D3D11VA where available) → GPU upload/convert → compositor → preview/program buses → cut; native swap-chain monitors in WPF | 1080p60 file plays to program with no dropped frames on reference hardware; cut is frame-accurate. |
+| **M3 First working video pipeline** (implemented; see ROADMAP for deviations) | as built: file decode (FFmpeg, software) and capture (Media Foundation, experimental) behind one `MediaSource` interface → frame sync → compositor (CPU reference, D3D11 experimental) → preview/program buses with layers, cut and transitions → WPF monitors (WriteableBitmap). Deferred: D3D11VA decode, GPU-resident frames, native swap-chain monitors. | 1080p60 file plays to program with no dropped frames on reference hardware; cut is frame-accurate. (Frame-accurate cut and 1080p60 synthetic soak verified; reference-hardware file run pending.) |
 
 ## 8. Initial testing strategy
 
@@ -227,3 +232,6 @@ Details and raw results: [TEST_REPORT.md](TEST_REPORT.md).
 - [ADR-0002](adr/0002-bounded-lock-free-logging.md) Bounded lock-free logging with an engine-owned log thread
 - [ADR-0003](adr/0003-linux-dev-host-and-windows-verification.md) Linux as development host; Windows remains the only product platform
 - [ADR-0004](adr/0004-ffmpeg-integration-and-licensing.md) FFmpeg integration and the LGPL licence guard
+- [ADR-0005](adr/0005-compositor-cpu-reference-and-d3d11.md) Compositor: CPU reference, Direct3D 11 path, CPU-resident frames
+- [ADR-0006](adr/0006-wpf-monitors-writeablebitmap.md) Preview/program monitors via WriteableBitmap (swap chains deferred)
+- [ADR-0007](adr/0007-capture-media-foundation.md) Video capture through Media Foundation

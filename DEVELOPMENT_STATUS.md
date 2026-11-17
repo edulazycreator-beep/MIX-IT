@@ -1,82 +1,70 @@
 # MIX IT — Development Status
 
-_Last updated: 2026-11-17 (first GitHub Actions run)_
+_Last updated: 2026-11-17 (Milestone 3)_
 
-**Current milestone:** M2 — Media Pipeline Foundation → **IMPLEMENTED on the dev host** (gaps listed below)
-**Previous milestone:** M1 — Foundation → implemented; **MSVC build, WPF compile and xUnit verified on GitHub Actions** (run 44031124025); interactive WPF run and real-GPU checks pending
-**Deviation from plan:** M2 was started before M1's Windows checks, at the user's request ("lanjut"), because this environment has no Windows/MSVC/nuget.org. Both milestones close only after the Windows checks below pass.
+**Current milestone:** M3 — First working video pipeline → **IMPLEMENTED**, tested on Linux and Windows CI (GitHub Actions run 44041552714, commit 1389f21, all green). Exit criterion on reference hardware still open (see below).
+**Previous milestones:** M1 Foundation and M2 Media pipeline foundation → TESTED on Linux and Windows CI; hands-on Windows use and the 1-hour soak on hardware still pending.
+**Next milestone:** M4 — Audio engine.
 
-## Completed and verified this session (M2)
+## Completed in M3
 
 | Item | Status | Evidence |
 |---|---|---|
-| Exact time base (rational rates, 128-bit muldiv, no-drift frame/sample times) | TESTED | 9 TimeBase tests incl. frame 3·10⁸ exactness |
-| Frame & audio buffer pools (fixed, aligned, ref-counted, no runtime allocation) | TESTED | Pool/VideoFramePool tests, TSan |
-| Bounded media queues with DropNewest / DropOldest + counters | TESTED | MediaQueue tests |
-| Synthetic test signal: bars, motion, machine-readable frame code, flash + click sync markers, tone | TESTED | 6 TestSignal tests |
-| Session API (lifecycle steps 3–8), per-input paced producers, output clock, frame sync (repeat/skip), program bus with cut, scaling, black fallback | TESTED | 11 Session tests, 60 s + 1080p59.94 soaks |
-| A/V alignment measurement end to end | TESTED | 0 ns measured (limit 10.4 µs) |
-| Precise pacing (absolute sleeps; Windows high-res waitable timer) | TESTED on Linux; Windows path run under Wine | |
-| FFmpeg integration: optional build, version check, **LGPL licence guard**, codec availability | TESTED | policy ON rejects GPL FFmpeg; ADR-0004 |
-| C ABI 0.2.0 (25 exports), managed `NativeSession`, media library API | TESTED | 30 managed tests (local runner) |
-| `mixit-probe --codecs`, `--session-test N [--format]` (PASS/FAIL soak) | TESTED | |
+| `MediaSource` / `SourceIo` abstraction (test signal, file, capture behind one interface) | TESTED | all session and file tests run through it |
+| FFmpeg file input: decode, BGRA (BT.709/601), resample, pts pacing, A/V-locked looping, `file` protocol only | TESTED | 7 file tests; Windows CI with pinned LGPL FFmpeg 9.0.2; local FFmpeg 6.1 and 9.0.2 |
+| Compositor interface + CPU reference (bilinear, crop, alpha, opacity, letter/pillarbox, mix/fade/wipe), band-parallel | TESTED | 8 pixel-exact tests; 640×360→1080p in 4.9 ms (Release, 2 cores) |
+| Direct3D 11 compositor (runtime shaders, WARP, CPU fallback on GPU failure) | EXPERIMENTAL | equals CPU reference within ±4 on WARP (CI); no real GPU measured |
+| Preview/program buses, 8 layers per bus, cut, auto transitions, preview rendered only while watched | TESTED | 10 bus tests incl. PiP decoded from pixels, transition timing under load |
+| Video capture abstraction + Media Foundation backend (enumerate, mode choice, RGB32, reconnect) | EXPERIMENTAL | Windows CI: enumeration + "no device" paths only |
+| C ABI 0.3.0 (33 exports), backwards-compatible struct growth | TESTED | compat tests with 0.2 struct sizes |
+| Managed bindings + `ProductionService` (MixIt.Core) | TESTED | 37 xUnit tests (CI) |
+| WPF Production Studio: monitors, tally, input tiles, CUT/AUTO, transition type/duration, PiP, formats, capture list, GPU toggle | TESTED (automated) | `MixIt.exe --self-test production` PASS on Windows CI |
+| `mixit-probe`: `--file`, `--compositor`, `--list-capture`, `--capture N`; soak exercises PiP/preview/mix/cut | TESTED | 1080p60 soak PASS (Release, 0 late ticks) |
+| ADR-0005/0006/0007, API contract 0.3, engine design §8–9, docs | DONE | |
 
-## Gaps in M2 (honest list)
+## Deviations from the M3 plan (honest list)
 
-| Item | Status | Note |
+| Planned | As built | Why / next |
 |---|---|---|
-| Generic media input abstraction | IN_PROGRESS | Inputs are the concrete test signal inside `Session::Input`. The source interface will be extracted in M3 when the file/capture sources give it a second, different implementation (avoids a speculative abstraction). |
-| 1-hour drift test | PARTIAL | Drift-free arithmetic is proven by tests; real-time soaks ran 60 s (720p) and 20 s (1080p59.94). Run `mixit-probe --session-test 3600` on Windows hardware. |
-| Google Benchmark harness | PLANNED | not added (no measurements needed yet for CPU reference path) |
-| FFmpeg log routing into the engine log | PLANNED (M3) | needed once decoding starts |
-| Pinned Windows LGPL FFmpeg build (version, configure line, hash) | PLANNED | ADR-0004 step 5 |
+| Decode with D3D11VA, frames stay on GPU | software decode, CPU-resident frames | no GPU on the dev host or CI to develop/verify against; ADR-0005 lists the steps |
+| GPU compositor as the program path | CPU compositor is default; D3D11 opt-in, EXPERIMENTAL | with CPU-resident frames the GPU path pays upload + readback; no GPU data yet to justify switching (ADR-0005) |
+| Native swap-chain monitors in WPF | WriteableBitmap monitors, 25 Hz | ADR-0006; swap chains in M8 |
+| DeckLink / NDI inputs in M3 | not started | optional vendor SDKs; planned as further `MediaSource` backends (M5) |
 
-## Verified on GitHub Actions (run 44031124025, commit 5516a44)
+## Still unverified (needs a Windows workstation)
 
-| Item | Result |
+| Item | How to check |
 |---|---|
-| MSVC 19.44 build of engine + tests (`/W4 /WX`), Windows Server 2022 runner | ✅ 75/75 native tests (1 skipped: no FFmpeg) |
-| .NET solution incl. **MixIt.Desktop (WPF)** | ✅ 0 warnings, 0 errors |
-| Managed tests under **real xUnit** (`dotnet test`) | ✅ 30/30 on Windows and Linux |
-| NuGet versions in `Directory.Packages.props` | ✅ resolved |
-| DXGI enumeration on real Windows | ✅ 2 adapters (Microsoft Basic Render Driver; no GPU on runner) |
-| `mixit-probe` on Windows | ✅ |
-| Packaged self-contained `MixIt.exe` starts, opens its window, engine logs (smoke test) | ✅ artifact `MixIt-win-x64-<sha>` per CI run |
-| Linux: Debug, ASan+UBSan, TSan, MinGW cross-check, xUnit | ✅ |
+| Hands-on use of the WPF app (layout, DPI, interaction, monitor smoothness) | run `MixIt.exe` from the CI artifact |
+| M3 exit criterion: 1080p60 file to program without drops | `mixit-probe --session-test 600 --format 1920x1080@60 --file clip.mp4` |
+| GPU compositor on real hardware, CPU vs GPU cost | `mixit-probe --session-test 60 --format 1920x1080@60 --compositor d3d11` vs `cpu` |
+| Capture with real webcams / capture cards (incl. a 4-input card) | `mixit-probe --list-capture`, then `--session-test 60 --capture 0`; in the app: ↻, select device, + Capture |
+| 1-hour drift soak (M2) | `mixit-probe --session-test 3600 --format 1920x1080@60000/1001` |
 
-## Still unverified
-
-| Item | Action |
-|---|---|
-| Hands-on use of the WPF app (layout, DPI, interaction) | download the CI artifact and run `MixIt.exe` |
-| DXGI / timing on real GPU hardware | `mixit-probe --codecs` and `--session-test 3600 --format 1920x1080@60000/1001` on a workstation |
-| FFmpeg on Windows (LGPL build) | ADR-0004 step 5, then CI with `FFMPEG_ROOT` |
-
-## Build status (this session)
+## Build status
 
 | Target | Result |
 |---|---|
+| Windows: MSVC 19.44 `/W4 /WX`, .NET 10 incl. WPF | ✅ 0 warnings (CI) |
 | Linux Debug / Release / ASan+UBSan / TSan | ✅ 0 warnings |
-| LGPL-policy variant (`-DMIXIT_REQUIRE_LGPL_FFMPEG=ON`) | ✅ |
-| MinGW-w64 cross-build | ✅ 0 warnings (without FFmpeg) |
-| .NET Interop, Core, Probe (offline mode) | ✅ 0 warnings |
-| MSVC (Windows Server 2022, GitHub Actions) | ✅ 0 warnings |
-| WPF (`MixIt.Desktop`) | ✅ compiles, 0 warnings |
+| MinGW-w64 cross-build (incl. D3D11 + Media Foundation code) | ✅ 0 warnings |
+| Windows package (self-contained `MixIt.exe` + LGPL FFmpeg DLLs) | ✅ artifact per CI run |
 
-## Test results (this session)
+## Test results
 
-Native **75/75** (Debug, ASan+UBSan, TSan incl. parallel under load) · Windows build under Wine **74 passed + 1 skipped** · Managed **30/30** (local runner) · soaks PASS. Details: [docs/TEST_REPORT.md](docs/TEST_REPORT.md).
+Native **103/103** (Windows CI; Linux Debug/Release/ASan/TSan; D3D11 test runs on Windows only) · managed **37/37** (real xUnit on Windows and Linux CI) · probe soaks PASS · production self-test PASS. Details: [docs/TEST_REPORT.md](docs/TEST_REPORT.md).
 
 ## Known issues
 
-1. `MixIt.Desktop` compiles in CI but has not been run interactively; it does not yet show sessions.
-2. CI runners have no GPU and no FFmpeg on Windows, so GPU and media-library paths are only partly covered there.
-3. Dev-host FFmpeg is GPL; it is tolerated only because the dev build disables the licence policy.
-4. Inputs cannot be added/removed while a session runs (hot-plug is M3).
-5. Session audio is consumed for measurement only; there is no mixer or audio output yet (M4).
+1. The CPU compositor's cost grows with resolution × layers; a Debug native build cannot hold 1080p60 with compositing (Release can, even on 2 cores).
+2. Monitors poll at 25 Hz and skip frames at 50/60 fps by design (confidence monitors, ADR-0006).
+3. Capture: frames are stamped on arrival (device latency appears as a constant offset); no capture audio; a device that stalls without returning could delay stopping the session (ADR-0007).
+4. Inputs can be added/removed only while production is stopped.
+5. Session audio is used for A/V measurement only — no mixer, monitoring or audio output (M4).
+6. Changing format or toggling the GPU compositor rebuilds the session (allowed only while stopped).
 
 ## Next recommended tasks
 
-1. **On a Windows workstation:** run the WPF app, `mixit-probe --codecs` and `mixit-probe --session-test 3600 --format 1920x1080@60000/1001`; record results.
-2. Provide the pinned LGPL FFmpeg for Windows (ADR-0004 step 5).
-3. Start M3: extract the media source interface; FFmpeg file source (decode, timestamps → master clock); D3D11 device + GPU upload/convert; native swap-chain monitors in WPF; GPU program path.
+1. **On a Windows workstation:** the checks in "Still unverified" — especially real capture devices and the GPU vs CPU compositor numbers; report the results so defaults can be set from data.
+2. Start **M4 — Audio engine**: WASAPI capture/render, mixer with per-input gain/pan/mute/solo, master + aux buses, meters, DSP chain, monitoring, and audio from file/capture inputs into the mixer; keep A/V sync with the video timeline.
+3. M3 follow-ups when hardware is available: D3D11VA decode, GPU-resident frames, asynchronous capture reader with device timestamps.

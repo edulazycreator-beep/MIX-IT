@@ -1,13 +1,14 @@
-# MIX IT — Native Engine API Contract (v0.2.0)
+# MIX IT — Native Engine API Contract (v0.3.0)
 
 Header: [`native/include/mixit/mixit_engine.h`](../native/include/mixit/mixit_engine.h).
 Library: `mixit_engine.dll` (Windows x64), `libmixit_engine.so` (Linux dev host).
-Exported symbols: exactly the 25 functions below (verified with `nm`/`objdump`).
+Exported symbols: exactly the 33 functions below (verified with `nm`/`objdump`).
 
 | Version | Added |
 |---|---|
 | 0.1.0 (M1) | engine lifecycle, logging, diagnostics, capabilities |
 | 0.2.0 (M2) | sessions (lifecycle steps 3–8), test-signal inputs, program frame access, media library (FFmpeg) queries |
+| 0.3.0 (M3) | media-file inputs, preview bus, cut, transitions, layers, bus frame access, compositor preference, capture devices (experimental); appended fields in `session_config`, `session_stats`, `input_stats` |
 
 ## General rules
 
@@ -137,7 +138,7 @@ destroy the session handle. A session handle keeps the engine *object* alive
 |---|---|
 | `width`, `height` | program size |
 | `frame_rate_num/den` | exact rational program rate |
-| `audio_sample_rate`, `audio_channels` | session audio format (inputs use it; no SRC before M4) |
+| `audio_sample_rate`, `audio_channels` | session audio format (file inputs are resampled to it) |
 | `program_pool_frames` | 0 = 8 |
 
 **`mixit_session_destroy(session)`** — stops (joins threads) and invalidates the handle.
@@ -154,6 +155,32 @@ destroy the session handle. A session handle keeps the engine *object* alive
 
 **`mixit_session_copy_program_frame(session, buffer, buffer_size, stride, out_info)`** — copies the latest program frame (BGRA8). `NOT_FOUND` if none (also after stop). `buffer = NULL, size = 0` is a size query: returns `BUFFER_TOO_SMALL` with `out_info` filled. `stride < width*4` → `INVALID_ARGUMENT`. Diagnostic/test path only; not for real-time display.
 
+### Sessions — API 0.3 additions (M3)
+
+Appended fields keep older callers working: a 0.2-sized `mixit_session_config`
+(32 bytes) means compositor AUTO; 0.2-sized `mixit_session_stats` (96) and
+`mixit_input_stats` (112) are filled up to the caller's size.
+
+**`mixit_session_config.compositor`** — `MIXIT_COMPOSITOR_PREFER_AUTO` (0, = CPU in 0.3), `_CPU` (1), `_D3D11` (2), `_D3D11_WARP` (3); `reserved` must be 0. A GPU preference that cannot be honoured falls back to CPU with a logged warning; `stats.compositor` (`MIXIT_COMPOSITOR_CPU` / `_D3D11`) reports what runs and `stats.compositor_fallbacks` counts GPU failures that switched a running session to CPU (ADR-0005).
+
+**`mixit_session_add_file_source(session, config, out_input_id)`** — only when not RUNNING. `path` = UTF-8 local file (the `file` protocol only); flag `MIXIT_FILE_SOURCE_LOOP`. Video is converted to BGRA at the file's size, audio resampled to the session format; paced by the file's timestamps. `NOT_FOUND` missing file; `NOT_SUPPORTED` FFmpeg unusable/no decodable stream; `IO` cannot open/parse. Input stats: `decode_errors`, `loops`.
+
+**`mixit_session_set_preview_input(session, input_id)`** — any time; 0 = black.
+
+**`mixit_session_cut(session)`** — swaps preview and program at the next tick; completes a running transition. Counts in `transitions_completed`.
+
+**`mixit_session_start_transition(session, kind, duration_frames)`** — `MIXIT_TRANSITION_MIX` / `_FADE` / `_WIPE` (`_CUT` = cut), 1..600 output frames. Advances with output time, then swaps the buses. While stopped: swaps immediately. `INVALID_STATE` if one is running; `INVALID_ARGUMENT` for other kinds/durations. Stats: `transition_active` (kind or −1), `transition_progress` 0..1.
+
+**`mixit_session_set_layer(session, bus, index, layer)`** — overlay layer 0..`MIXIT_MAX_LAYERS`−1 (8) on `MIXIT_BUS_PROGRAM` / `_PREVIEW`, drawn over the bus's base input in index order. `mixit_layer_config`: `input_id` (0 = disabled), `crop_*` (normalized source rect, must lie within 0..1 and be non-empty), `dest_*` (normalized output rect; may extend beyond the frame, within −4..5), `opacity` 0..1, `reserved` = 0. Floats are allowed here (geometry); they never carry time. `NOT_FOUND` unknown input.
+
+**`mixit_session_copy_bus_frame(session, bus, buffer, size, stride, out_info)`** — as `copy_program_frame` for either bus. Preview is rendered only while it is read (within the last second), so the first preview read after a pause returns `NOT_FOUND` until the next tick.
+
+### Capture devices — API 0.3 (EXPERIMENTAL, Windows)
+
+**`mixit_enumerate_capture_devices(engine, devices, capacity, out_count)`** — Media Foundation video capture sources. Caller sets `struct_size` of each entry; `capacity` 0 queries the count. `id` is never truncated (entries whose id exceeds 511 bytes are skipped). `NOT_SUPPORTED` on non-Windows hosts and Windows without Media Foundation.
+
+**`mixit_session_add_capture_source(session, config, out_input_id)`** — only when not RUNNING. `device_id` from enumeration; `width`/`height` both 0 (= largest mode up to 1920×1080) or both set; `frame_rate_num` 0 = highest up to 60 fps. Video only; frames stamped on arrival. Device loss: last frame held, `decode_errors` counted, reopened every second (ADR-0007). `NOT_FOUND` no such device; `NOT_SUPPORTED` no usable mode / no backend.
+
 ### Media library (API 0.2, global)
 
 **`mixit_get_media_library_info(out_info)`** — FFmpeg presence, versions (`major<<16|minor<<8|micro`), licence string and flags `COMPILED_IN`, `VERSIONS_MATCH`, `LICENSE_LGPL`, `LGPL_REQUIRED`, `USABLE` (= compiled ∧ versions match ∧ (LGPL ∨ ¬required)). See ADR-0004.
@@ -169,10 +196,14 @@ destroy the session handle. A session handle keeps the engine *object* alive
 | `mixit_engine_diagnostics` | 48 | |
 | `mixit_system_capabilities` | 232 | `total_physical_memory_bytes` 24, `cpu_brand` 40, `os_description` 104 |
 | `mixit_gpu_adapter_info` | 160 | `description` 32 |
-| `mixit_session_config` | 32 | |
+| `mixit_session_config` | 40 | `compositor` 32 (0.2 size 32 accepted) |
 | `mixit_test_source_config` | 32 | |
-| `mixit_session_stats` | 96 | `ticks` 16, `video_latency_max_ns` 88 |
-| `mixit_input_stats` | 112 | `frames_produced` 8, `av_offset_max_abs_ns` 104 |
+| `mixit_session_stats` | 136 | `ticks` 16, `video_latency_max_ns` 88, `preview_input_id` 96, `transitions_completed` 112, `compositor_fallbacks` 128 (0.2 size 96 accepted) |
+| `mixit_input_stats` | 128 | `frames_produced` 8, `av_offset_max_abs_ns` 104, `decode_errors` 112 (0.2 size 112 accepted) |
+| `mixit_file_source_config` | 16 | `path` 8 |
+| `mixit_layer_config` | 48 | `opacity` 40 |
+| `mixit_capture_device_info` | 648 | `name` 8, `id` 136 |
+| `mixit_capture_source_config` | 32 | `device_id` 8 |
 | `mixit_video_frame_info` | 56 | `tick_pts_ns` 24, `tick_index` 48 |
 | `mixit_media_library_info` | 152 | |
 | `mixit_codec_info` | 128 | |
