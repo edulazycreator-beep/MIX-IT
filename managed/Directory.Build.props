@@ -1,0 +1,32 @@
+<Project>
+  <!-- Shared settings for every MIX IT .NET project. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <Deterministic>true</Deterministic>
+    <Version>0.1.0</Version>
+    <Company>MIX IT</Company>
+    <Product>MIX IT</Product>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Offline verification mode cannot reach nuget.org for vulnerability data;
+         normal builds keep NuGet auditing on (warnings are errors). -->
+    <NuGetAudit Condition="'$(MixItOfflineVerification)' == 'true'">false</NuGetAudit>
+    <MixItRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</MixItRepoRoot>
+  </PropertyGroup>
+
+  <!--
+    Where the native engine binary is taken from (see BUILD_GUIDE.md).
+    Override with: dotnet build -p:MixItNativeDir=<folder containing mixit_engine.dll / libmixit_engine.so>
+  -->
+  <PropertyGroup Condition="'$(MixItNativeDir)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">
+    <MixItNativeConfiguration Condition="'$(MixItNativeConfiguration)' == ''">$(Configuration)</MixItNativeConfiguration>
+    <MixItNativeDir>$(MixItRepoRoot)\build\windows-msvc\bin\$(MixItNativeConfiguration)</MixItNativeDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MixItNativeDir)' == '' and $([MSBuild]::IsOSPlatform('Linux'))">
+    <MixItNativeDir>$(MixItRepoRoot)/build/linux-debug/bin</MixItNativeDir>
+  </PropertyGroup>
+</Project>

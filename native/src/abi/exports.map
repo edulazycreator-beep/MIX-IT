@@ -1,0 +1,5 @@
+/* Linux/ELF export list: only the documented C ABI is visible. */
+{
+  global: mixit_*;
+  local: *;
+};

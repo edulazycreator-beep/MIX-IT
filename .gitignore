@@ -1,0 +1,17 @@
+# Build output
+/build/
+/out/
+bin/
+obj/
+*.user
+.vs/
+.vscode/
+*.suo
+TestResults/
+# Native
+*.pdb
+*.ilk
+*.obj
+compile_commands.json
+# Logs produced by local runs
+*.jsonl

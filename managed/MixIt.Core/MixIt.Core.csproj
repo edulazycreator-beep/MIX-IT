@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    MixIt.Core — application services (engine lifetime, logging bridge,
+    capability model). UI-free: no WPF references allowed here.
+  -->
+  <PropertyGroup>
+    <RootNamespace>MixIt.Core</RootNamespace>
+    <MixItUsesExtensionsLogging>true</MixItUsesExtensionsLogging>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MixIt.Interop\MixIt.Interop.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MixIt.Tests" />
+  </ItemGroup>
+</Project>

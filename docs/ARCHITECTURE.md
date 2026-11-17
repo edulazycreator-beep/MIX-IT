@@ -1,0 +1,229 @@
+# MIX IT — Architecture
+
+Status: **Milestone 2 (Media pipeline foundation) implemented on the dev host; M1/M2 Windows verification pending**. This document is the architecture plan
+required before implementation (master prompt §28). It distinguishes what
+exists (✅ implemented and verified), what exists but is unverified (⚠️), and
+what is planned (◻). Detailed engine internals live in
+[ENGINE_DESIGN.md](ENGINE_DESIGN.md); the exact native interface in
+[API_CONTRACT.md](API_CONTRACT.md).
+
+---
+
+## 1. Architecture overview
+
+MIX IT is a single Windows process with two halves joined by one versioned C ABI:
+
+```
+┌──────────────────────────── managed (.NET 10) ─────────────────────────────┐
+│  MixIt.Desktop (WPF, MVVM)      mixit-probe (CLI)      [M7] Remote API     │
+│            │                          │                       │            │
+│            └──────────────┬───────────┴───────────────────────┘            │
+│                    MixIt.Core  — application services                      │
+│        EngineHost · EngineLogStream · NativeEngineLoggerProvider           │
+│        [M3+] Input/Output/Production services · [M7] Automation           │
+│        [M9] Licensing · Project store (SQLite + JSON)                      │
+│                           │                                                │
+│                    MixIt.Interop — the ONLY P/Invoke code                  │
+│        LibraryImport · SafeHandle · blittable structs · callback bridge    │
+└───────────────────────────┬────────────────────────────────────────────────┘
+                            │  C ABI  (mixit_engine.h, versioned, opaque handles)
+┌───────────────────────────┴──────────── native (C++20) ────────────────────┐
+│  ABI layer: validation · handle registry · exception barrier · last error  │
+│  Engine (root object, lifecycle owner)                                     │
+│   ├─ Logger (lock-free bounded queue → log thread → JSONL file / callback) │
+│   ├─ Capability probes (CPU · memory · OS · GPU/DXGI)  [M2+: encoders,     │
+│   │                                       audio/capture devices, storage]  │
+│   ├─ Sessions (M2): time base · pools · media queues · test signal ·       │
+│   │   frame sync · program bus · A/V measurement · FFmpeg licence guard   │
+│   ├─ [M3] Video engine: inputs → frame sync → GPU compositor → buses       │
+│   ├─ [M4] Audio engine: inputs → mixer/DSP → buses (real-time thread)      │
+│   ├─ [M5] Encoders · Streaming outputs · Recording outputs                 │
+│   ├─ [M6] Graphics · Replay · Multiview · Virtual studio                   │
+│   └─ [M7] Command dispatcher used by automation & remote control           │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Responsibility split
+
+| Engine (master prompt §5) | Lives in | Why |
+|---|---|---|
+| A. Application layer | managed (Desktop + Core) | UI, workspace, projects, preferences, licensing are not latency-critical; C# is productive and safe here. |
+| B. Video engine | native | Frame-accurate timing, GPU (D3D11) resources, zero-copy paths. |
+| C. Audio engine | native | Hard real-time callback; no GC pauses allowed. |
+| D. Graphics engine | native renderer + managed authoring | Rendering composites into the GPU pipeline; template editing is UI. |
+| E. Streaming engine | native | Encoders and muxers (FFmpeg) operate on native frames. |
+| F. Recording engine | native | Same encoders/muxers; disk I/O on dedicated threads. |
+| G. Output engine | native | Swap chains, NDI/DeckLink output, frame pacing. |
+| H. Automation engine | managed, issuing native commands | Macros/schedules are not real-time; they call the same command API as the UI and remote control. |
+
+### Rules the architecture enforces
+
+1. **One boundary.** Only `MixIt.Interop` calls native code; only `mixit_engine.h` is exported (verified: the Linux `.so` and the Windows DLL export exactly the 25 `mixit_*` functions of API 0.2).
+2. **The engine never depends on the UI thread.** Native work runs on engine-owned threads; UI stalls cannot stall media (master prompt §K).
+3. **Bounded everything.** Every queue has a fixed capacity and an explicit overload policy (drop newest, drop oldest, or signal degraded) — see ENGINE_DESIGN §4.
+4. **Honest status.** Capabilities report what was *probed*, not assumed (`MIXIT_DETECTED_*` bits); UI sections without a backend say so.
+
+### Process model (decision)
+
+In-process engine for M1–M8. The C ABI makes moving the engine into a separate
+service process possible later (an IPC shim implementing the same header),
+which would isolate the engine from UI crashes. VST3 plug-ins will need
+out-of-process hosting for crash isolation (M4 ADR).
+
+---
+
+## 2. Repository structure
+
+```
+mixit/
+├─ CLAUDE.md                  project rules (read first every session)
+├─ DEVELOPMENT_STATUS.md      verified state, build/test results, next task
+├─ ROADMAP.md                 milestones and status
+├─ CHANGELOG.md
+├─ README.md
+├─ CMakeLists.txt             native build entry  (+ CMakePresets.json)
+├─ cmake/                     compiler options, toolchains (MinGW cross-check)
+├─ native/                    MixIt.Native — the engine
+│  ├─ include/mixit/mixit_engine.h      the public C ABI (only exported surface)
+│  ├─ src/abi/                ABI implementation, handle registry, export map
+│  ├─ src/core/               Engine, Status, last-error
+│  ├─ src/logging/            Logger, JSON-lines formatting
+│  ├─ src/media/              time base, pools, media queues, test signal, session, FFmpeg
+│  ├─ src/platform/           OS helpers, capability probes (Windows / Linux dev host)
+│  ├─ src/util/               bounded MPMC queue, clocks
+│  └─ tests/                  GoogleTest suite
+├─ managed/                   .NET 10 projects
+│  ├─ Directory.Build.props / .targets / Directory.Packages.props
+│  ├─ MixIt.Interop/          P/Invoke layer (BCL only)
+│  ├─ MixIt.Core/             application services
+│  ├─ MixIt.Probe/            mixit-probe diagnostics CLI
+│  ├─ MixIt.Desktop/          WPF application
+│  └─ tests/MixIt.Tests/      xUnit tests (use the real native engine)
+├─ MixIt.sln / MixIt.Engine.slnf   full solution / non-WPF subset
+├─ scripts/                   build-windows.ps1, verify-linux.sh, Wine runner
+├─ docs/                      this document, design, API, build, tests, licenses, ADRs
+└─ .github/workflows/ci.yml   Windows + Linux CI (not yet executed)
+```
+
+Modules named in CLAUDE.md that do not exist yet — `MixIt.SDK`,
+`MixIt.Protocol`, `MixIt.Licensing` — are **not** created as empty shells.
+Each is created in the milestone that gives it content (Protocol/SDK: M7,
+Licensing: M9), per the "avoid unnecessary abstractions" rule.
+
+---
+
+## 3. Dependency and licensing assessment
+
+Full inventory with versions: [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+I am not a lawyer; items marked ⚖️ need review by qualified counsel before
+commercial release.
+
+| Dependency | Use | License | Assessment |
+|---|---|---|---|
+| GoogleTest 1.14 / 1.15.2 | native tests | BSD-3 | Test-only, not redistributed. ✅ |
+| xUnit 2.9.3, Test SDK | managed tests | Apache-2.0 / MIT | Test-only. ✅ |
+| Microsoft.Extensions.* 10.0 | logging, DI | MIT | Redistributable. ✅ |
+| **FFmpeg** (M2) | decode/encode/mux | LGPL-2.1+ *or* GPL | Must be an **LGPL build** (no `--enable-gpl`, no `--enable-nonfree`), **dynamically linked** (DLLs), with source offer + notices. That excludes libx264/libx265 (GPL) and fdk-aac (non-free). Software H.264 options: OpenH264 (BSD-2; Cisco's binary carries its patent licence) or a commercial x264 licence; hardware NVENC/QSV/AMF via FFmpeg are LGPL-compatible. ⚖️ |
+| Codec patents (H.264, HEVC, AAC) | encode/decode | patent pools | Copyright licences do not cover patents. Distribution of encoders may require pool licences. ⚖️ |
+| **NDI SDK** (M3/M5) | NDI in/out | NDI SDK licence (royalty-free) | Requires "NDI® is a registered trademark of Vizrt NDI AB" attribution, a link to ndi.video near NDI UI, DLLs shipped in the app folder. Optional at build time (runtime-loaded). NDI Advanced SDK is a separate commercial licence. |
+| **Blackmagic DeckLink SDK** (M3/M5) | SDI/HDMI I/O | Blackmagic SDK EULA | Uses the COM API installed with Desktop Video drivers; headers only at build time. Review EULA for header redistribution. ⚖️ |
+| **ASIO SDK** (M4) | low-latency audio | Steinberg proprietary **or** GPLv3 (since Oct 2025) | A closed-source commercial product must use the **proprietary licence agreement**; the GPLv3 option would force GPL on MIX IT. ⚖️ |
+| **VST3 SDK ≥ 3.8** (M4) | plug-in hosting | MIT (since 3.8, Oct 2025) | Commercial use allowed with copyright/licence notice retained; VST trademark/logo rules apply separately. |
+| SRT (libsrt) (M5) | SRT transport | MPL-2.0 | File-level copyleft; fine when dynamically linked and modifications to its files are published. |
+| SQLite (M2/M8) | project store | Public domain | ✅ (via Microsoft.Data.Sqlite, MIT + SQLitePCLRaw, Apache-2.0). |
+| OpenSSL / Schannel (M5) | RTMPS TLS | Apache-2.0 / OS | Prefer the OS TLS stack (Schannel) where FFmpeg supports it, to inherit OS certificate validation. |
+| HTML graphics engine (M6) | browser sources | CEF (BSD) or WebView2 (MS licence) | Decision deferred to an M6 ADR: off-screen GPU rendering support is the deciding factor. |
+
+---
+
+## 4. Native engine design (summary)
+
+Detailed in [ENGINE_DESIGN.md](ENGINE_DESIGN.md). Key points:
+
+- **Root object:** `mixit::Engine` owns every subsystem; `shutdown()` stops them in reverse start order. Destroying the handle always shuts down first.
+- **Threads:** control plane (ABI callers, may lock), engine-owned worker threads (media, I/O, logging) that never wait on the control plane or the UI. Real-time threads: no locks, no allocation, no syscalls beyond what the device API requires.
+- **Errors:** internals return `Status` (code + message); the ABI layer converts to `mixit_result` + per-thread last-error text. No exception crosses the ABI (catch-all barrier).
+- **Time base:** one monotonic nanosecond master clock (`mixit_get_monotonic_time_ns`); all media timestamps are on it. Video output ticks at a rational frame rate; audio drift is corrected by adaptive resampling, never by dropping samples silently.
+- **Memory:** fixed-capacity pools (frames, audio blocks, log records) allocated up front; steady-state media processing does not allocate.
+
+## 5. C# ↔ C++ interoperability design
+
+Implemented in M1 (✅ verified by tests and the probe):
+
+| Concern | Design |
+|---|---|
+| Binding | `[LibraryImport]` source-generated P/Invoke (no runtime marshalling stubs; trimming/AOT-safe). |
+| Library resolution | `"mixit_engine"` → `mixit_engine.dll` (Windows), `libmixit_engine.so` (Linux dev host). |
+| Handles | Opaque 64-bit ids (never reused) validated in a registry; `EngineHandle : SafeHandle` ref-counts every call, so a handle cannot be freed mid-call; finalizer releases forgotten engines (tested). |
+| Structs | Blittable, `struct_size`-prefixed for forward compatibility; sizes/offsets asserted on **both** sides (`static_assert` + managed layout tests). |
+| Strings | UTF-8 in, UTF-8 out into caller buffers; native never returns heap memory to free. |
+| Errors | `mixit_result` → `MixItNativeException(Result, Function, NativeMessage)` using the per-thread last error. |
+| Callbacks | `[UnmanagedCallersOnly]` static function pointer + `GCHandle` user data. Invoked only on the engine's log thread; exceptions are caught and counted; disposing from inside a callback is refused (would self-join). The `GCHandle` is freed only after native destroy has joined the thread. |
+| Versioning | Library and binding both check API version; while major = 0, minor must match exactly. |
+
+Planned for high-rate data (M3/M4): video never crosses the boundary — native
+renders preview/program into DXGI swap chains hosted in WPF via `HwndHost`;
+meters are read as fixed-size snapshot structs polled at UI rate; engine events
+use a bounded native event queue drained on an engine event thread.
+
+## 6. Build system configuration
+
+- **Native:** CMake ≥ 3.25 with presets. `windows-msvc` (VS 2022, x64, multi-config) is the release toolchain. Linux presets (`linux-debug/-release/-asan/-tsan`) and `mingw-crosscheck` exist for development hosts and CI. Warnings are errors (`/W4 /WX`, `-Wall -Wextra -Wpedantic -Wconversion ... -Werror`). The engine core is an OBJECT library linked into both the DLL and the test executable; Linux exports are restricted by a version script, Windows by `__declspec(dllexport)` on ABI functions only.
+- **Managed:** `MixIt.sln` (all projects) and `MixIt.Engine.slnf` (no WPF). Central package management with pinned versions; `TreatWarningsAsErrors`; nullable enabled. The native binary is copied next to apps/tests from `MixItNativeDir` (defaults per OS, overridable).
+- **Offline verification mode** (`-p:MixItOfflineVerification=true`): only for hosts without nuget.org; maps the logging abstractions to the locally installed shared framework. Never for releases.
+
+Step-by-step instructions: [BUILD_GUIDE.md](BUILD_GUIDE.md).
+
+## 7. Milestone implementation plan
+
+See [../ROADMAP.md](../ROADMAP.md) for the full list. Near term:
+
+| Milestone | Scope | Exit criteria |
+|---|---|---|
+| **M1 Foundation** | repo, CMake, .NET solution, native lib, C ABI, interop, init/shutdown, logging, errors, capability interface, tests, docs | Native + managed tests green; **MSVC build and Windows run still to be executed** (see DEVELOPMENT_STATUS). |
+| **M2 Media pipeline foundation** (implemented on dev host) | FFmpeg (LGPL, dynamic) init + capability detection of codecs/HW encoders; `MediaSource` abstraction; synthetic video (test pattern + frame counter + timecode burn-in) and audio (tone + clicks synced to frames); frame & audio buffer pools; rational time bases; bounded media queues with policies; diagnostics counters | Synthetic A/V runs for 1 h with measured drift < 1 ms; zero steady-state allocation (instrumented); queues never exceed bounds under overload tests. |
+| **M3 First working video pipeline** | file decode (FFmpeg, D3D11VA where available) → GPU upload/convert → compositor → preview/program buses → cut; native swap-chain monitors in WPF | 1080p60 file plays to program with no dropped frames on reference hardware; cut is frame-accurate. |
+
+## 8. Initial testing strategy
+
+| Layer | Tooling | In M1 |
+|---|---|---|
+| Native units | GoogleTest | ✅ 75 tests (M2 adds time base, pools/queues, test signal, sessions, media library); M1's 40: queue (incl. MPMC stress), JSON, last-error/UTF-8, logger (ordering, drop policy, truncation, file sink), ABI (lifecycle, validation, version, struct-size negotiation, concurrency vs destroy, callback re-entrancy), capability probes |
+| Memory/thread safety | ASan + UBSan, TSan | ✅ all 40 tests clean under both |
+| Windows code paths | MinGW cross-build + Wine | ✅ 40/40 under Wine (DXGI unavailable headless → graceful path verified) |
+| Windows/MSVC | `build-windows.ps1`, CI | ⚠️ not yet executed |
+| Managed interop | xUnit (real native engine) | ✅ 30 tests executed via a local runner shim (nuget.org blocked); ⚠️ not yet run under real xUnit |
+| End-to-end | `mixit-probe` | ✅ text/JSON/log-file/error exit codes; `--session-test` soaks PASS (720p29.97 60 s, 1080p59.94 20 s) |
+| Later | synthetic sources, golden-frame hashing, long-run A/V drift, Google Benchmark, soak tests, hardware lab matrix | M2+ |
+
+Details and raw results: [TEST_REPORT.md](TEST_REPORT.md).
+
+## 9. Risks, technical limitations and architectural conflicts
+
+### Conflicts identified before writing code (and their resolution)
+
+1. **"Unlimited inputs" vs real hardware.** Resolved: no hardcoded limits in data structures, but admission control based on detected capabilities and configured resource limits; the engine refuses or degrades explicitly rather than silently dropping.
+2. **GPL contamination.** FFmpeg must be LGPL/dynamic (no x264/x265/fdk-aac); ASIO must use Steinberg's proprietary licence. Both are hard constraints on M2/M4.
+3. **WPF and live video.** WPF's composition is not designed for several 60 fps video surfaces. Resolved: native DXGI swap chains in `HwndHost` regions (accepting WPF airspace limits on monitor areas).
+4. **"No hardcoded secrets" vs offline licence validation.** Resolved in design: licences are signed server-side (asymmetric, e.g. Ed25519); the app embeds only the public key. Client-side checks can be bypassed on any desktop app; the goal is honest-user enforcement, not DRM.
+5. **Module list in CLAUDE.md vs "no unnecessary abstractions".** Resolved: modules are created when they have content (see §2).
+6. **Development environment vs target platform.** This repository was developed in a Linux environment without MSVC, WPF or nuget.org. Mitigated by Linux dev-host builds, sanitizers, MinGW cross-compilation and Wine execution — but the **MSVC build, the WPF app and real-GPU DXGI enumeration are unverified** until run on Windows.
+
+### Ongoing risks
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Scope: a vMix-class product is many engineer-years | Schedule | Strict milestone gating; engine first; feature status matrix (PRODUCT_SPEC). |
+| MSVC-only compile errors/warnings | M1 exit | First action next session: run `scripts/build-windows.ps1` (one known MSVC warning, C4324, pre-emptively handled). |
+| Real-time behaviour on Windows (timer resolution, MMCSS, GPU scheduling, power plans) | Dropped frames/audio glitches | M2/M4 pacing design with MMCSS, waitable timers, instrumentation of late frames/underruns. |
+| Single-process crash domain | A UI or plug-in crash ends the show | UI-exception containment (done in Desktop); out-of-process VST3 host (M4); optional out-of-process engine later. |
+| Vendor SDK EULAs (NDI, DeckLink, ASIO) | Distribution | Optional, runtime-detected integrations; attribution and EULA checklist in THIRD_PARTY_LICENSES. |
+| Codec patent licensing | Commercial release | Legal review before M9. |
+| Hardware coverage | Field failures | Hardware lab matrix (NVIDIA/AMD/Intel GPUs, DeckLink, USB/HDMI capture) before M9. |
+
+## Architecture decision records
+
+- [ADR-0001](adr/0001-hybrid-native-engine-with-c-abi.md) Hybrid C# + C++ with a single versioned C ABI
+- [ADR-0002](adr/0002-bounded-lock-free-logging.md) Bounded lock-free logging with an engine-owned log thread
+- [ADR-0003](adr/0003-linux-dev-host-and-windows-verification.md) Linux as development host; Windows remains the only product platform
+- [ADR-0004](adr/0004-ffmpeg-integration-and-licensing.md) FFmpeg integration and the LGPL licence guard

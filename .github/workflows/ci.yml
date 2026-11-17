@@ -1,0 +1,58 @@
+# MIX IT continuous integration.
+#  - windows: the product platform (MSVC engine + native tests, .NET solution
+#    incl. the WPF app, xUnit tests, mixit-probe smoke test)
+#  - linux-devhost: sanitizers (ASan/UBSan, TSan), MinGW cross-check, xUnit
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows (MSVC + .NET)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Build and test
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Configuration Debug
+      - name: Upload native test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ctest-log
+          path: build/windows-msvc/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  linux-devhost:
+    name: Linux dev host (sanitizers, MinGW cross-check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Install toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgtest-dev libgmock-dev g++-mingw-w64-x86-64-posix \
+                                  pkg-config libavcodec-dev libavformat-dev libavutil-dev
+      - name: Allow sanitizers on high-entropy ASLR kernels
+        # TSan/ASan abort with "unexpected memory mapping" when mmap_rnd_bits > 28.
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Verify
+        run: ./scripts/verify-linux.sh --mingw

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    MixIt.Interop — the ONLY managed code that talks to the native engine.
+    Depends on the base class library only (no NuGet packages).
+  -->
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <RootNamespace>MixIt.Interop</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Types and members with behaviour are documented; self-describing enum
+         members (mirrors of the C header constants) are exempt. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MixIt.Tests" />
+  </ItemGroup>
+</Project>

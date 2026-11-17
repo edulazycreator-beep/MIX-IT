@@ -1,0 +1,469 @@
+/*
+ * MIX IT — Native Engine public C ABI
+ *
+ * This header is the ONLY supported boundary between the native engine
+ * (mixit_engine.dll / libmixit_engine.so) and any host (the C# desktop
+ * application, tests, future SDK consumers).
+ *
+ * ABI rules (see docs/API_CONTRACT.md for the full contract):
+ *   - Plain C only. No C++ types cross this boundary.
+ *   - Fixed-width integer types only. No `bool`, `long`, `size_t` or enums
+ *     in structs or signatures; enum *values* are passed as int32_t.
+ *   - Engines are opaque handles. Handles are validated on every call;
+ *     a destroyed or foreign handle yields MIXIT_E_INVALID_HANDLE instead of
+ *     undefined behaviour.
+ *   - Every extensible struct begins with `uint32_t struct_size`, which the
+ *     caller sets to sizeof(struct) as it was compiled. The engine reads and
+ *     writes at most that many bytes, which lets new fields be appended in
+ *     later minor versions without breaking older callers.
+ *   - Strings are UTF-8, NUL-terminated. Output strings are written into
+ *     caller-owned buffers; the engine never returns heap memory that the
+ *     caller must free.
+ *   - No C++ exception ever crosses the boundary. Every function returns a
+ *     mixit_result (or a plain value documented as infallible).
+ *   - On failure, a human-readable message for the CALLING THREAD is
+ *     available from mixit_get_last_error_message().
+ *
+ * Versioning: during 0.x, a minor version change MAY break the ABI.
+ * Hosts must require an exact major.minor match while major == 0.
+ */
+#ifndef MIXIT_ENGINE_H
+#define MIXIT_ENGINE_H
+
+#include <stdint.h>
+
+#if defined(_WIN32)
+#  define MIXIT_CALL __cdecl
+#  if defined(MIXIT_ENGINE_BUILDING)
+#    define MIXIT_API __declspec(dllexport)
+#  elif defined(MIXIT_ENGINE_STATIC)
+#    define MIXIT_API
+#  else
+#    define MIXIT_API __declspec(dllimport)
+#  endif
+#else
+#  define MIXIT_CALL
+#  if defined(MIXIT_ENGINE_BUILDING)
+#    define MIXIT_API __attribute__((visibility("default")))
+#  else
+#    define MIXIT_API
+#  endif
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ------------------------------------------------------------------------ */
+/* Versioning                                                               */
+/* ------------------------------------------------------------------------ */
+
+/* Cast-free so the header compiles cleanly under strict C++ warnings
+ * (-Wold-style-cast); the unsigned masks make the arithmetic unsigned. */
+#define MIXIT_MAKE_VERSION(major, minor, patch) \
+    ((((major) & 0xFFu) << 24) | (((minor) & 0xFFFu) << 12) | ((patch) & 0xFFFu))
+#define MIXIT_VERSION_MAJOR(v) (((v) >> 24) & 0xFFu)
+#define MIXIT_VERSION_MINOR(v) (((v) >> 12) & 0xFFFu)
+#define MIXIT_VERSION_PATCH(v) ((v) & 0xFFFu)
+
+#define MIXIT_API_VERSION_MAJOR 0
+#define MIXIT_API_VERSION_MINOR 2
+#define MIXIT_API_VERSION_PATCH 0
+#define MIXIT_API_VERSION \
+    MIXIT_MAKE_VERSION(MIXIT_API_VERSION_MAJOR, MIXIT_API_VERSION_MINOR, MIXIT_API_VERSION_PATCH)
+
+/* ------------------------------------------------------------------------ */
+/* Result codes                                                             */
+/* ------------------------------------------------------------------------ */
+
+typedef int32_t mixit_result;
+
+#define MIXIT_OK                       0
+#define MIXIT_E_INVALID_ARGUMENT      -1  /* NULL pointer, bad enum value, bad struct_size */
+#define MIXIT_E_INVALID_HANDLE        -2  /* handle unknown, destroyed, or NULL           */
+#define MIXIT_E_INVALID_STATE         -3  /* call not allowed in current engine state     */
+#define MIXIT_E_OUT_OF_MEMORY         -4
+#define MIXIT_E_NOT_SUPPORTED         -5  /* feature unavailable on this platform/build   */
+#define MIXIT_E_BUFFER_TOO_SMALL      -6  /* output buffer too small; see out_required    */
+#define MIXIT_E_VERSION_MISMATCH      -7  /* caller compiled against incompatible ABI     */
+#define MIXIT_E_NOT_FOUND             -8  /* index or id out of range                     */
+#define MIXIT_E_PLATFORM              -9  /* an OS / driver call failed                   */
+#define MIXIT_E_IO                   -10  /* file system error                            */
+#define MIXIT_E_INTERNAL             -99  /* unexpected internal failure (bug)            */
+
+/* ------------------------------------------------------------------------ */
+/* Logging                                                                  */
+/* ------------------------------------------------------------------------ */
+
+#define MIXIT_LOG_TRACE    0
+#define MIXIT_LOG_DEBUG    1
+#define MIXIT_LOG_INFO     2
+#define MIXIT_LOG_WARNING  3
+#define MIXIT_LOG_ERROR    4
+#define MIXIT_LOG_CRITICAL 5
+#define MIXIT_LOG_OFF      6
+
+typedef struct mixit_log_record {
+    uint32_t    struct_size;
+    int32_t     level;              /* MIXIT_LOG_*                                   */
+    int64_t     unix_time_ns;       /* wall-clock time the record was produced       */
+    uint64_t    thread_id;          /* OS thread id of the producing thread          */
+    uint64_t    sequence;           /* per-engine monotonically increasing number    */
+    const char* category;           /* UTF-8, valid only for the callback's duration */
+    const char* message;            /* UTF-8, valid only for the callback's duration */
+} mixit_log_record;
+
+/*
+ * Log callback. Invoked on the engine-owned logging thread ("mixit-log"),
+ * NEVER on the thread that produced the record and NEVER on a real-time
+ * media thread. The callback must not call mixit_engine_shutdown or
+ * mixit_engine_destroy for the same engine (that would self-deadlock; the
+ * engine detects this and returns MIXIT_E_INVALID_STATE).
+ */
+typedef void (MIXIT_CALL *mixit_log_callback)(const mixit_log_record* record, void* user_data);
+
+/* ------------------------------------------------------------------------ */
+/* Engine lifecycle                                                         */
+/* ------------------------------------------------------------------------ */
+
+typedef struct mixit_engine_s* mixit_engine;   /* opaque */
+
+#define MIXIT_ENGINE_STATE_INITIALIZED 1
+#define MIXIT_ENGINE_STATE_SHUT_DOWN   2
+
+typedef struct mixit_engine_config {
+    uint32_t           struct_size;        /* = sizeof(mixit_engine_config)              */
+    uint32_t           api_version;        /* = MIXIT_API_VERSION the caller compiled with*/
+    int32_t            min_log_level;      /* MIXIT_LOG_*; records below are discarded   */
+    uint32_t           log_queue_capacity; /* records; 0 = default (4096). Rounded up to
+                                              a power of two. Bounded: when full, records
+                                              are dropped and counted, never blocking.   */
+    const char*        log_file_path;      /* UTF-8 path for JSON-lines log, or NULL     */
+    mixit_log_callback log_callback;       /* optional, may be NULL                      */
+    void*              log_user_data;      /* passed through to log_callback             */
+} mixit_engine_config;
+
+typedef struct mixit_engine_diagnostics {
+    uint32_t struct_size;
+    int32_t  state;                     /* MIXIT_ENGINE_STATE_*                          */
+    uint64_t uptime_ns;                 /* monotonic time since create                   */
+    uint64_t log_records_accepted;      /* enqueued for the log thread                   */
+    uint64_t log_records_dropped;       /* rejected because the bounded queue was full   */
+    uint64_t log_records_delivered;     /* fully processed by all sinks                  */
+    uint64_t log_file_write_errors;
+} mixit_engine_diagnostics;
+
+/* ------------------------------------------------------------------------ */
+/* Capabilities                                                             */
+/* ------------------------------------------------------------------------ */
+
+/* mixit_system_capabilities.cpu_features bits */
+#define MIXIT_CPU_FEATURE_SSE2     (1u << 0)
+#define MIXIT_CPU_FEATURE_SSE4_1   (1u << 1)
+#define MIXIT_CPU_FEATURE_SSE4_2   (1u << 2)
+#define MIXIT_CPU_FEATURE_AVX      (1u << 3)
+#define MIXIT_CPU_FEATURE_AVX2     (1u << 4)
+#define MIXIT_CPU_FEATURE_FMA3     (1u << 5)
+#define MIXIT_CPU_FEATURE_AVX512F  (1u << 6)
+
+/* mixit_system_capabilities.detection_flags bits: what was actually probed */
+#define MIXIT_DETECTED_CPU            (1u << 0)
+#define MIXIT_DETECTED_MEMORY         (1u << 1)
+#define MIXIT_DETECTED_OS             (1u << 2)
+#define MIXIT_DETECTED_GPU_ADAPTERS   (1u << 3)  /* unset => GPU enumeration unavailable */
+
+typedef struct mixit_system_capabilities {
+    uint32_t struct_size;
+    uint32_t detection_flags;               /* MIXIT_DETECTED_*                        */
+    uint32_t logical_processor_count;
+    uint32_t physical_core_count;           /* 0 if unknown                            */
+    uint32_t cpu_features;                  /* MIXIT_CPU_FEATURE_* (OS support checked) */
+    uint32_t gpu_adapter_count;
+    uint64_t total_physical_memory_bytes;
+    uint64_t available_physical_memory_bytes;
+    char     cpu_brand[64];                 /* UTF-8, NUL-terminated                   */
+    char     os_description[128];           /* UTF-8, NUL-terminated                   */
+} mixit_system_capabilities;
+
+#define MIXIT_GPU_ADAPTER_FLAG_SOFTWARE (1u << 0)  /* e.g. Microsoft Basic Render Driver */
+
+typedef struct mixit_gpu_adapter_info {
+    uint32_t struct_size;
+    uint32_t vendor_id;                     /* PCI vendor id (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel) */
+    uint32_t device_id;
+    uint32_t flags;                         /* MIXIT_GPU_ADAPTER_FLAG_*                */
+    uint64_t dedicated_video_memory_bytes;
+    uint64_t shared_system_memory_bytes;
+    char     description[128];              /* UTF-8, NUL-terminated                   */
+} mixit_gpu_adapter_info;
+
+/* ------------------------------------------------------------------------ */
+/* Global functions (no engine required, always thread-safe)                */
+/* ------------------------------------------------------------------------ */
+
+/* Packed MIXIT_API_VERSION the library was built with. Infallible. */
+MIXIT_API uint32_t MIXIT_CALL mixit_get_api_version(void);
+
+/* Static, NUL-terminated build description (version, compiler, config).
+ * The pointer is valid for the lifetime of the loaded library. Infallible. */
+MIXIT_API const char* MIXIT_CALL mixit_get_build_info(void);
+
+/* Static name for a result code, e.g. "MIXIT_E_INVALID_HANDLE". Infallible. */
+MIXIT_API const char* MIXIT_CALL mixit_result_name(mixit_result result);
+
+/* Monotonic engine clock in nanoseconds. All media timestamps produced by
+ * the engine are expressed on this clock. Infallible. */
+MIXIT_API uint64_t MIXIT_CALL mixit_get_monotonic_time_ns(void);
+
+/*
+ * Copies the calling thread's last error message (set by the most recent
+ * failing mixit_* call on this thread) into `buffer`.
+ *   - buffer may be NULL when capacity == 0 (size query).
+ *   - *out_required (optional) receives the length INCLUDING the NUL.
+ *   - Returns MIXIT_E_BUFFER_TOO_SMALL if it did not fit (the buffer then
+ *     holds a truncated, NUL-terminated prefix when capacity > 0).
+ * Successful calls do not clear the message.
+ */
+MIXIT_API mixit_result MIXIT_CALL mixit_get_last_error_message(char* buffer,
+                                                                uint32_t capacity,
+                                                                uint32_t* out_required);
+
+/* ------------------------------------------------------------------------ */
+/* Engine functions                                                         */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * Lifecycle step 1 — Initialize.
+ * Creates and initializes an engine. On success *out_engine receives a
+ * handle in state MIXIT_ENGINE_STATE_INITIALIZED. On failure *out_engine is
+ * set to NULL. Ownership: the caller owns the handle and must release it
+ * with mixit_engine_destroy.
+ */
+MIXIT_API mixit_result MIXIT_CALL mixit_engine_create(const mixit_engine_config* config,
+                                                       mixit_engine* out_engine);
+
+/*
+ * Lifecycle step 9 — Shutdown.
+ * Stops all engine activity, flushes and closes the log (the log callback
+ * will not be invoked after this returns). Idempotent: shutting down an
+ * already shut-down engine returns MIXIT_OK. The handle remains valid for
+ * mixit_engine_get_diagnostics until destroyed.
+ */
+MIXIT_API mixit_result MIXIT_CALL mixit_engine_shutdown(mixit_engine engine);
+
+/*
+ * Releases the handle. Implies mixit_engine_shutdown. After this call the
+ * handle value is invalid; any further use returns MIXIT_E_INVALID_HANDLE.
+ * Must not be called concurrently with other calls on the same handle.
+ */
+MIXIT_API mixit_result MIXIT_CALL mixit_engine_destroy(mixit_engine engine);
+
+MIXIT_API mixit_result MIXIT_CALL mixit_engine_get_diagnostics(mixit_engine engine,
+                                                                mixit_engine_diagnostics* out_diagnostics);
+
+/* Changes the minimum log level at runtime. Thread-safe, lock-free. */
+MIXIT_API mixit_result MIXIT_CALL mixit_engine_set_log_level(mixit_engine engine, int32_t level);
+
+/*
+ * Submits a log record from the host so managed and native logs share one
+ * ordered stream. Never blocks: if the bounded log queue is full the record
+ * is dropped and counted in diagnostics (still returns MIXIT_OK).
+ * Messages longer than the engine's record capacity are truncated.
+ */
+MIXIT_API mixit_result MIXIT_CALL mixit_engine_log(mixit_engine engine,
+                                                    int32_t level,
+                                                    const char* category,
+                                                    const char* message);
+
+/*
+ * Lifecycle step 2 — Detect capabilities.
+ * Probes CPU, memory, OS and (where supported) GPU adapters. Fields that
+ * could not be probed are zero and their MIXIT_DETECTED_* bit is clear.
+ * The result is cached; adapters are then queried by index with
+ * mixit_engine_get_gpu_adapter.
+ */
+MIXIT_API mixit_result MIXIT_CALL mixit_engine_detect_capabilities(mixit_engine engine,
+                                                                    mixit_system_capabilities* out_capabilities);
+
+/* Returns MIXIT_E_INVALID_STATE if capabilities were never detected and
+ * MIXIT_E_NOT_FOUND if index >= gpu_adapter_count. */
+MIXIT_API mixit_result MIXIT_CALL mixit_engine_get_gpu_adapter(mixit_engine engine,
+                                                                uint32_t index,
+                                                                mixit_gpu_adapter_info* out_adapter);
+
+/* ------------------------------------------------------------------------ */
+/* Sessions (lifecycle steps 3-8) — API 0.2                                 */
+/* ------------------------------------------------------------------------ */
+
+typedef struct mixit_session_s* mixit_session;   /* opaque */
+
+#define MIXIT_SESSION_STATE_CONFIGURING 1   /* created, never started          */
+#define MIXIT_SESSION_STATE_RUNNING     2
+#define MIXIT_SESSION_STATE_STOPPED     3   /* can be started again            */
+#define MIXIT_SESSION_STATE_CLOSED      4   /* engine shut down; only stats/destroy */
+
+#define MIXIT_PIXEL_FORMAT_BGRA8 1          /* B,G,R,A bytes; DXGI_FORMAT_B8G8R8A8_UNORM */
+
+#define MIXIT_FRAME_FLAG_SYNC_FLASH (1u << 0) /* test signal flash frame (A/V sync marker) */
+
+typedef struct mixit_session_config {
+    uint32_t struct_size;          /* = sizeof(mixit_session_config)                   */
+    uint32_t width;                /* program size: even, 16..8192                     */
+    uint32_t height;
+    uint32_t frame_rate_num;       /* 24000/1001, 24, 25, 30000/1001, 30, 50, 60000/1001, 60 */
+    uint32_t frame_rate_den;
+    uint32_t audio_sample_rate;    /* 48000 or 44100                                   */
+    uint32_t audio_channels;       /* 1..8                                             */
+    uint32_t program_pool_frames;  /* 0 = default (8); 5..64                           */
+} mixit_session_config;
+
+/* Synthetic test-signal input: colour bars, moving stripe, machine-readable
+ * frame code, optional flash frames with matching audio clicks, sine tone.
+ * Audio uses the session's sample rate and channel count. */
+typedef struct mixit_test_source_config {
+    uint32_t struct_size;
+    uint32_t width;                  /* even, 64..8192 */
+    uint32_t height;
+    uint32_t frame_rate_num;         /* same set as sessions; may differ from the session rate */
+    uint32_t frame_rate_den;
+    uint32_t tone_hz;                /* 0 = no tone */
+    uint32_t flash_interval_frames;  /* 0 = no flash/click */
+    uint32_t reserved;               /* must be 0 */
+} mixit_test_source_config;
+
+typedef struct mixit_session_stats {
+    uint32_t struct_size;
+    int32_t  state;                  /* MIXIT_SESSION_STATE_* */
+    uint32_t input_count;
+    uint32_t program_input_id;       /* 0 = black */
+    uint64_t ticks;                  /* output frames clocked */
+    uint64_t late_ticks;             /* started > half a period late */
+    uint64_t skipped_ticks;          /* skipped to recover from a stall */
+    int64_t  max_tick_lateness_ns;
+    uint64_t program_frames;
+    uint64_t program_black_frames;   /* no input frame available */
+    uint64_t program_frames_dropped; /* program output queue overflow */
+    uint64_t program_pool_exhausted;
+    int64_t  video_latency_last_ns;  /* tick time - presented source frame time */
+    int64_t  video_latency_max_ns;
+} mixit_session_stats;
+
+typedef struct mixit_input_stats {
+    uint32_t struct_size;
+    uint32_t input_id;
+    uint64_t frames_produced;
+    uint64_t frames_dropped;         /* input queue overflow (oldest dropped) */
+    uint64_t frames_pool_exhausted;
+    uint64_t frames_presented;       /* distinct frames used by frame sync */
+    uint64_t frames_repeated;        /* ticks that repeated the previous frame */
+    uint64_t frames_skipped;         /* frames superseded before being used */
+    uint64_t producer_late_skips;
+    uint64_t audio_blocks_produced;
+    uint64_t audio_blocks_dropped;
+    uint64_t audio_blocks_consumed;
+    uint64_t av_sync_events;         /* flash/click pairs measured */
+    int64_t  av_offset_last_ns;      /* click time - flash frame time */
+    int64_t  av_offset_max_abs_ns;
+} mixit_input_stats;
+
+typedef struct mixit_video_frame_info {
+    uint32_t struct_size;
+    uint32_t width;
+    uint32_t height;
+    int32_t  pixel_format;           /* MIXIT_PIXEL_FORMAT_* */
+    uint32_t input_id;               /* 0 = black frame */
+    uint32_t flags;                  /* MIXIT_FRAME_FLAG_* */
+    int64_t  tick_pts_ns;            /* output tick time (master clock) */
+    int64_t  source_pts_ns;          /* presented source frame time */
+    int64_t  source_sequence;        /* source frame index, -1 for black */
+    uint64_t tick_index;
+} mixit_video_frame_info;
+
+/* Lifecycle step 3. The session belongs to `engine`; engine shutdown closes
+ * it (state CLOSED). The caller must still destroy the session handle. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_create(mixit_engine engine,
+                                                        const mixit_session_config* config,
+                                                        mixit_session* out_session);
+
+/* Stops the session if running and releases the handle. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_destroy(mixit_session session);
+
+/* Lifecycle step 4. Only while not RUNNING. Input ids are unique per session (1..255). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_test_source(mixit_session session,
+                                                                 const mixit_test_source_config* config,
+                                                                 uint32_t* out_input_id);
+
+/* Only while not RUNNING. If it was the program input, program becomes black (0). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_remove_input(mixit_session session, uint32_t input_id);
+
+/* Selects the program input (0 = black). Allowed while RUNNING; takes
+ * effect at the next output tick (a cut). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_program_input(mixit_session session, uint32_t input_id);
+
+/* Lifecycle step 6 / 7. Both are idempotent. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_start(mixit_session session);
+MIXIT_API mixit_result MIXIT_CALL mixit_session_stop(mixit_session session);
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_stats(mixit_session session, mixit_session_stats* out_stats);
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_input_stats(mixit_session session, uint32_t input_id,
+                                                                 mixit_input_stats* out_stats);
+
+/*
+ * Copies the most recent program frame (BGRA8, rows of width*4 bytes at
+ * `stride` byte intervals) into `buffer` and describes it in *out_info.
+ *   - MIXIT_E_NOT_FOUND: no program frame yet (or the session is stopped).
+ *   - MIXIT_E_BUFFER_TOO_SMALL: *out_info is still filled (size query:
+ *     buffer = NULL, buffer_size = 0); required = stride*(height-1) + width*4.
+ * Intended for diagnostics and tests, not for real-time display (M3 renders
+ * monitors natively).
+ */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_copy_program_frame(mixit_session session, uint8_t* buffer,
+                                                                    uint32_t buffer_size, uint32_t stride,
+                                                                    mixit_video_frame_info* out_info);
+
+/* ------------------------------------------------------------------------ */
+/* Media library (FFmpeg) — API 0.2. Global: no engine required.            */
+/* ------------------------------------------------------------------------ */
+
+#define MIXIT_MEDIA_LIBRARY_COMPILED_IN    (1u << 0)  /* engine built with FFmpeg            */
+#define MIXIT_MEDIA_LIBRARY_VERSIONS_MATCH (1u << 1)  /* runtime majors == build headers     */
+#define MIXIT_MEDIA_LIBRARY_LICENSE_LGPL   (1u << 2)  /* runtime libraries report LGPL       */
+#define MIXIT_MEDIA_LIBRARY_LGPL_REQUIRED  (1u << 3)  /* this build enforces the LGPL policy */
+#define MIXIT_MEDIA_LIBRARY_USABLE         (1u << 4)  /* the engine will use FFmpeg          */
+
+typedef struct mixit_media_library_info {
+    uint32_t struct_size;
+    uint32_t flags;               /* MIXIT_MEDIA_LIBRARY_* */
+    uint32_t avcodec_version;     /* major<<16 | minor<<8 | micro, 0 if absent */
+    uint32_t avformat_version;
+    uint32_t avutil_version;
+    uint32_t reserved;
+    char     version[64];         /* FFmpeg version string, UTF-8 */
+    char     license[64];         /* licence reported by libavcodec */
+} mixit_media_library_info;
+
+#define MIXIT_CODEC_DECODER  (1u << 0)
+#define MIXIT_CODEC_ENCODER  (1u << 1)
+#define MIXIT_CODEC_HARDWARE (1u << 2)  /* backed by dedicated hardware (NVENC, QSV, AMF, ...) */
+
+typedef struct mixit_codec_info {
+    uint32_t struct_size;
+    uint32_t flags;               /* MIXIT_CODEC_* */
+    char     long_name[120];      /* UTF-8 */
+} mixit_codec_info;
+
+MIXIT_API mixit_result MIXIT_CALL mixit_get_media_library_info(mixit_media_library_info* out_info);
+
+/* Whether codec `name` (FFmpeg codec name, e.g. "h264", "h264_nvenc") is in
+ * the loaded build. Presence in the build does NOT prove the GPU/driver can
+ * run it (encoders are open-tested in M5).
+ * MIXIT_E_NOT_FOUND: not in the build. MIXIT_E_NOT_SUPPORTED: FFmpeg absent
+ * or not usable. */
+MIXIT_API mixit_result MIXIT_CALL mixit_query_codec(const char* name, mixit_codec_info* out_info);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* MIXIT_ENGINE_H */

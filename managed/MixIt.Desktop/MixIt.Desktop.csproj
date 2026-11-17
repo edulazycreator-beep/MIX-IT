@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    MixIt.Desktop — WPF operator application (MVVM). UI only: all engine
+    work goes through MixIt.Core services. Windows-only.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>MixIt</AssemblyName>
+    <RootNamespace>MixIt.Desktop</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <MixItCopyNativeEngine>true</MixItCopyNativeEngine>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MixIt.Core\MixIt.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
+  </ItemGroup>
+</Project>

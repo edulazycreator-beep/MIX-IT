@@ -1,0 +1,59 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": { "MIXIT_BUILD_TESTS": "ON" }
+    },
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "inherits": "base",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    { "name": "windows-msvc", "displayName": "Windows x64 (MSVC, multi-config)", "inherits": "windows-base" },
+
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    { "name": "linux-debug",   "displayName": "Linux dev host - Debug",   "inherits": "linux-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "linux-release", "displayName": "Linux dev host - Release", "inherits": "linux-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } },
+    { "name": "linux-asan",    "displayName": "Linux dev host - ASan+UBSan", "inherits": "linux-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "MIXIT_ENABLE_SANITIZERS": "ON" } },
+    { "name": "linux-tsan",    "displayName": "Linux dev host - TSan", "inherits": "linux-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "MIXIT_ENABLE_TSAN": "ON" } },
+    {
+      "name": "mingw-crosscheck",
+      "displayName": "Cross-compile check for Windows code paths (MinGW-w64, not a release toolchain)",
+      "inherits": "linux-base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/mingw-w64-x86_64.cmake",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "MIXIT_BUILD_TESTS": "OFF" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-debug",   "configurePreset": "windows-msvc", "configuration": "Debug" },
+    { "name": "windows-release", "configurePreset": "windows-msvc", "configuration": "Release" },
+    { "name": "linux-debug",     "configurePreset": "linux-debug" },
+    { "name": "linux-release",   "configurePreset": "linux-release" },
+    { "name": "linux-asan",      "configurePreset": "linux-asan" },
+    { "name": "linux-tsan",      "configurePreset": "linux-tsan" },
+    { "name": "mingw-crosscheck","configurePreset": "mingw-crosscheck" }
+  ],
+  "testPresets": [
+    { "name": "windows-debug",   "configurePreset": "windows-msvc", "configuration": "Debug",   "output": { "outputOnFailure": true } },
+    { "name": "windows-release", "configurePreset": "windows-msvc", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "linux-debug",     "configurePreset": "linux-debug",   "output": { "outputOnFailure": true } },
+    { "name": "linux-release",   "configurePreset": "linux-release", "output": { "outputOnFailure": true } },
+    { "name": "linux-asan",      "configurePreset": "linux-asan",    "output": { "outputOnFailure": true } },
+    { "name": "linux-tsan",      "configurePreset": "linux-tsan",    "output": { "outputOnFailure": true } }
+  ]
+}

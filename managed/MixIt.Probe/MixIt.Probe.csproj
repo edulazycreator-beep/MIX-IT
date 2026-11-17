@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    mixit-probe — headless hardware-diagnostics tool. Starts the native
+    engine, runs capability detection, prints a report (text or JSON) and
+    exits non-zero on failure. Used for support, CI smoke tests and
+    end-to-end verification of the managed <-> native boundary.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>mixit-probe</AssemblyName>
+    <RootNamespace>MixIt.Probe</RootNamespace>
+    <MixItCopyNativeEngine>true</MixItCopyNativeEngine>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MixIt.Core\MixIt.Core.csproj" />
+  </ItemGroup>
+</Project>

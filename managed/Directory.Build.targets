@@ -1,0 +1,32 @@
+<Project>
+  <!--
+    Projects that load the engine at runtime (apps, tests) set
+    <MixItCopyNativeEngine>true</MixItCopyNativeEngine> to get the native
+    binary copied next to their output.
+  -->
+  <Target Name="MixItIncludeNativeEngine" BeforeTargets="AssignTargetPaths" Condition="'$(MixItCopyNativeEngine)' == 'true'">
+    <ItemGroup>
+      <_MixItNativeCandidate Include="$(MixItNativeDir)/mixit_engine.dll;$(MixItNativeDir)/mixit_engine.pdb;$(MixItNativeDir)/libmixit_engine.so*" />
+      <None Include="@(_MixItNativeCandidate)" Condition="Exists('%(FullPath)')"
+            Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="MixItCheckNativeEngine" BeforeTargets="Build" Condition="'$(MixItCopyNativeEngine)' == 'true'">
+    <Warning Condition="!Exists('$(MixItNativeDir)/mixit_engine.dll') and !Exists('$(MixItNativeDir)/libmixit_engine.so')"
+             Text="MIX IT native engine not found in '$(MixItNativeDir)'. Build it first (cmake --build --preset ...) or pass -p:MixItNativeDir=... — the app/tests will fail to load mixit_engine at runtime." />
+  </Target>
+
+  <!--
+    OFFLINE VERIFICATION MODE (development hosts without nuget.org access only).
+    Microsoft.Extensions.Logging.Abstractions also ships inside the
+    Microsoft.AspNetCore.App shared framework installed with the SDK. This
+    switch swaps the NuGet reference for that framework reference so the
+    managed core can be compiled and exercised without package downloads.
+    Never use it for release builds: it adds an ASP.NET Core runtime dependency.
+  -->
+  <ItemGroup Condition="'$(MixItOfflineVerification)' == 'true'">
+    <PackageReference Remove="Microsoft.Extensions.Logging.Abstractions" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" Condition="'$(MixItUsesExtensionsLogging)' == 'true'" />
+  </ItemGroup>
+</Project>
