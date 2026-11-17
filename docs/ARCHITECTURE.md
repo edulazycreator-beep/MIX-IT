@@ -185,17 +185,17 @@ See [../ROADMAP.md](../ROADMAP.md) for the full list. Near term:
 
 | Milestone | Scope | Exit criteria |
 |---|---|---|
-| **M1 Foundation** | repo, CMake, .NET solution, native lib, C ABI, interop, init/shutdown, logging, errors, capability interface, tests, docs | Native + managed tests green; **MSVC build and Windows run still to be executed** (see DEVELOPMENT_STATUS). |
-| **M2 Media pipeline foundation** (implemented on dev host) | FFmpeg (LGPL, dynamic) init + capability detection of codecs/HW encoders; `MediaSource` abstraction; synthetic video (test pattern + frame counter + timecode burn-in) and audio (tone + clicks synced to frames); frame & audio buffer pools; rational time bases; bounded media queues with policies; diagnostics counters | Synthetic A/V runs for 1 h with measured drift < 1 ms; zero steady-state allocation (instrumented); queues never exceed bounds under overload tests. |
+| **M1 Foundation** | repo, CMake, .NET solution, native lib, C ABI, interop, init/shutdown, logging, errors, capability interface, tests, docs | Native + managed tests green on Windows CI ✅; hands-on Windows use pending (see DEVELOPMENT_STATUS). |
+| **M2 Media pipeline foundation** (tested on Linux + Windows CI) | FFmpeg (LGPL, dynamic) init + capability detection of codecs/HW encoders; `MediaSource` abstraction; synthetic video (test pattern + frame counter + timecode burn-in) and audio (tone + clicks synced to frames); frame & audio buffer pools; rational time bases; bounded media queues with policies; diagnostics counters | Synthetic A/V runs for 1 h with measured drift < 1 ms; zero steady-state allocation (instrumented); queues never exceed bounds under overload tests. |
 | **M3 First working video pipeline** (implemented; see ROADMAP for deviations) | as built: file decode (FFmpeg, software) and capture (Media Foundation, experimental) behind one `MediaSource` interface → frame sync → compositor (CPU reference, D3D11 experimental) → preview/program buses with layers, cut and transitions → WPF monitors (WriteableBitmap). Deferred: D3D11VA decode, GPU-resident frames, native swap-chain monitors. | 1080p60 file plays to program with no dropped frames on reference hardware; cut is frame-accurate. (Frame-accurate cut and 1080p60 synthetic soak verified; reference-hardware file run pending.) |
 
 ## 8. Initial testing strategy
 
-| Layer | Tooling | In M1 |
+| Layer | Tooling | Status (M3) |
 |---|---|---|
 | Native units | GoogleTest | ✅ 103 tests (M3 adds file source, compositor incl. D3D11 vs CPU, buses/transitions/layers, capture); M1's 40: queue (incl. MPMC stress), JSON, last-error/UTF-8, logger (ordering, drop policy, truncation, file sink), ABI (lifecycle, validation, version, struct-size negotiation, concurrency vs destroy, callback re-entrancy), capability probes |
-| Memory/thread safety | ASan + UBSan, TSan | ✅ all 40 tests clean under both |
-| Windows code paths | MinGW cross-build + Wine | ✅ 40/40 under Wine (DXGI unavailable headless → graceful path verified) |
+| Memory/thread safety | ASan + UBSan, TSan | ✅ all native tests clean under both (Linux CI) |
+| Windows code paths | MinGW cross-build (+ Wine in M1–M2) | ✅ cross-build on every push, incl. D3D11 and Media Foundation code |
 | Windows/MSVC | `build-windows.ps1`, CI | ✅ every push (GitHub Actions) |
 | Managed interop | xUnit (real native engine) | ✅ 37 tests under real xUnit on Windows and Linux CI |
 | End-to-end | `mixit-probe`, `MixIt.exe --self-test production` | ✅ probe soaks PASS (incl. 1080p60 with PiP + transitions); production self-test PASS on Windows CI |
@@ -212,7 +212,7 @@ Details and raw results: [TEST_REPORT.md](TEST_REPORT.md).
 3. **WPF and live video.** WPF's composition is not designed for several 60 fps video surfaces. Interim (M3): 25 Hz WriteableBitmap confidence monitors (ADR-0006). Target (M8): native DXGI swap chains in `HwndHost` regions (accepting WPF airspace limits on monitor areas).
 4. **"No hardcoded secrets" vs offline licence validation.** Resolved in design: licences are signed server-side (asymmetric, e.g. Ed25519); the app embeds only the public key. Client-side checks can be bypassed on any desktop app; the goal is honest-user enforcement, not DRM.
 5. **Module list in CLAUDE.md vs "no unnecessary abstractions".** Resolved: modules are created when they have content (see §2).
-6. **Development environment vs target platform.** This repository was developed in a Linux environment without MSVC, WPF or nuget.org. Mitigated by Linux dev-host builds, sanitizers, MinGW cross-compilation and Wine execution — but the **MSVC build, the WPF app and real-GPU DXGI enumeration are unverified** until run on Windows.
+6. **Development environment vs target platform.** This repository was developed in a Linux environment without MSVC, WPF or nuget.org. Mitigated by Linux dev-host builds, sanitizers, MinGW cross-compilation and Wine execution — and, since M2, by Windows CI (MSVC, WPF, packaging, self-test). Still unverified: hands-on use, real GPUs and capture hardware.
 
 ### Ongoing risks
 
