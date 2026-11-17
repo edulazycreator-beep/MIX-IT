@@ -10,6 +10,9 @@
 #endif
 #include <windows.h>
 
+#include <share.h>
+
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <string>
@@ -95,11 +98,13 @@ std::FILE* open_append_utf8(const std::string& path_utf8, std::string& error) {
         error = e.what();
         return nullptr;
     }
-    std::FILE* f = nullptr;
-    const errno_t rc = ::_wfopen_s(&f, wide.c_str(), L"ab");
-    if (rc != 0 || f == nullptr) {
+    // _wfsopen with _SH_DENYWR: other processes may READ the file while the
+    // engine runs (operators and support tail live logs), but not write it.
+    // _wfopen_s would open it unshared and lock everyone else out.
+    std::FILE* f = ::_wfsopen(wide.c_str(), L"ab", _SH_DENYWR);
+    if (f == nullptr) {
         char buf[128] = {};
-        ::strerror_s(buf, sizeof(buf), rc);
+        ::strerror_s(buf, sizeof(buf), errno);
         error = buf;
         return nullptr;
     }

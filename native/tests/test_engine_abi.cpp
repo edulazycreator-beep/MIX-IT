@@ -5,6 +5,8 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <cstring>
 #include <string>
@@ -225,6 +227,18 @@ TEST(EngineAbi, LogFileIsCreated) {
     c.log_file_path = path.c_str();
     mixit_engine e = nullptr;
     ASSERT_EQ(mixit_engine_create(&c, &e), MIXIT_OK) << last_error();
+
+    // Support staff must be able to read the log while the engine is running
+    // (on Windows a file opened with _wfopen_s cannot be opened by anyone else).
+    std::string live;
+    for (int i = 0; i < 200 && live.empty(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::ifstream reader(path, std::ios::binary);
+        ASSERT_TRUE(reader.is_open()) << "log file is locked while the engine runs";
+        live.assign(std::istreambuf_iterator<char>(reader), std::istreambuf_iterator<char>());
+    }
+    EXPECT_NE(live.find("engine initialized"), std::string::npos) << live;
+
     ASSERT_EQ(mixit_engine_destroy(e), MIXIT_OK);
     EXPECT_GT(std::filesystem::file_size(path), 0u);
     std::filesystem::remove(path);
