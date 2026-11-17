@@ -9,6 +9,8 @@ public enum ProductionInputKind
 {
     TestSignal,
     MediaFile,
+    /// <summary>Webcam / capture card (EXPERIMENTAL).</summary>
+    CaptureDevice,
 }
 
 /// <summary>An input of the current production, as the operator sees it.</summary>
@@ -110,6 +112,17 @@ public sealed class ProductionService : IDisposable
         RequireStopped("add inputs");
         var spec = new InputSpec(ProductionInputKind.MediaFile, Path.GetFileName(path), path, loop);
         return AddSpec(spec);
+    }
+
+    /// <summary>Connected capture devices (empty where capture is unsupported).</summary>
+    public IReadOnlyList<CaptureDevice> GetCaptureDevices() => EngineAvailable ? _host.EnumerateCaptureDevices() : [];
+
+    /// <summary>Adds a webcam / capture card input (EXPERIMENTAL).</summary>
+    public ProductionInput AddCaptureDevice(CaptureDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        RequireStopped("add inputs");
+        return AddSpec(new InputSpec(ProductionInputKind.CaptureDevice, device.Name, device.Id, false));
     }
 
     public void RemoveInput(uint inputId)
@@ -243,12 +256,14 @@ public sealed class ProductionService : IDisposable
             Width = _format.Width, Height = _format.Height, FrameRate = _format.FrameRate,
             ToneHz = 0, FlashIntervalFrames = 0,
         }),
+        ProductionInputKind.CaptureDevice => session.AddCaptureSource(spec.Path!),
         _ => session.AddFileSource(spec.Path!, spec.Loop),
     };
 
     private string Describe(InputSpec spec) => spec.Kind switch
     {
         ProductionInputKind.TestSignal => $"{_format.Width}x{_format.Height} @ {_format.FrameRate.Value:0.##}",
+        ProductionInputKind.CaptureDevice => "Capture device (experimental)",
         _ => spec.Loop ? "Media file, looping" : "Media file",
     };
 
@@ -295,5 +310,6 @@ public sealed class ProductionService : IDisposable
 
     private void RaiseChanged() => Changed?.Invoke(this, EventArgs.Empty);
 
+    /// <param name="Path">File path, or the device id for capture devices.</param>
     private sealed record InputSpec(ProductionInputKind Kind, string Name, string? Path, bool Loop);
 }

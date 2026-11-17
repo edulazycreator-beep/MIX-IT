@@ -126,6 +126,12 @@
             <DockPanel>
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
                     <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                        <ComboBox ItemsSource="{Binding CaptureDevices}" SelectedItem="{Binding SelectedCaptureDevice}" DisplayMemberPath="Name"
+                                  Width="180" VerticalAlignment="Center" Margin="0,0,4,0" ToolTip="Webcams and capture cards (experimental)" />
+                        <Button Content="↻" Command="{Binding RefreshCaptureDevicesCommand}" Style="{StaticResource StudioButton}" Margin="0,0,4,0"
+                                ToolTip="Find capture devices" />
+                        <Button Content="+ Capture" Command="{Binding AddCaptureDeviceCommand}" Style="{StaticResource StudioButton}"
+                                ToolTip="Add the selected capture device (experimental, video only)" Margin="0,0,16,0" />
                         <Button Content="+ Test signal" Command="{Binding AddTestSignalCommand}" Style="{StaticResource StudioButton}" />
                         <Button Content="+ Media file…" Command="{Binding AddMediaFileCommand}" Style="{StaticResource StudioButton}" Margin="0" />
                     </StackPanel>

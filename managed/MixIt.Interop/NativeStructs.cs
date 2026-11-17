@@ -172,6 +172,27 @@ internal unsafe struct MixitFileSourceConfig
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitCaptureDeviceInfo
+{
+    public uint StructSize;
+    public uint Flags;
+    public fixed byte Name[128];
+    public fixed byte Id[512];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitCaptureSourceConfig
+{
+    public uint StructSize;
+    public uint Flags;
+    public byte* DeviceId;
+    public uint Width;
+    public uint Height;
+    public uint FrameRateNum;
+    public uint FrameRateDen;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct MixitVideoFrameInfo
 {
     public uint StructSize;
@@ -219,6 +240,8 @@ internal static class NativeStructSizes
     public const int TestSourceConfig = 32;
     public const int SessionStats = 136;
     public const int LayerConfig = 48;
+    public const int CaptureDeviceInfo = 648;
+    public const int CaptureSourceConfig = 32;
     public const int InputStats = 128;
     public const int FileSourceConfig = 16;
     public const int VideoFrameInfo = 56;

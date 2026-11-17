@@ -16,6 +16,7 @@ set(MIXIT_CORE_SOURCES
     src/logging/logger.cpp
     src/media/cpu_compositor.cpp
     src/media/d3d11_compositor.cpp
+    src/media/capture_source_windows.cpp
     src/media/ffmpeg_library.cpp
     src/media/file_source.cpp
     src/media/session.cpp
@@ -51,7 +52,7 @@ set_target_properties(mixit_engine_core PROPERTIES
     VISIBILITY_INLINES_HIDDEN ON)
 target_link_libraries(mixit_engine_core PUBLIC Threads::Threads)
 if(WIN32)
-    target_link_libraries(mixit_engine_core PUBLIC dxgi d3d11)
+    target_link_libraries(mixit_engine_core PUBLIC dxgi d3d11 mfuuid ole32)
 endif()
 target_compile_definitions(mixit_engine_core PRIVATE
     MIXIT_HAVE_FFMPEG=$<BOOL:${MIXIT_FFMPEG_FOUND}>

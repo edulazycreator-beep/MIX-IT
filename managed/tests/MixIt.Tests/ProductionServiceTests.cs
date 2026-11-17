@@ -79,7 +79,7 @@ public class ProductionServiceTests
             Assert.False(service.IsRunning);
             Assert.Null(service.TryCopyBusFrame(VideoBus.Program, 0, 0, 0));
             service.RemoveInput(a.Id);
-            Assert.Equal(1, service.Inputs.Count);
+            Assert.Single(service.Inputs);
         }
     }
 
@@ -121,6 +121,19 @@ public class ProductionServiceTests
             var ex = Assert.Throws<MixItNativeException>(() => service.AddMediaFile("/no/such/file.mp4"));
             Assert.Equal(NativeResult.NotFound, ex.Result);
             Assert.Empty(service.Inputs);
+        }
+    }
+
+    [Fact]
+    public void CaptureDeviceListingNeverThrows()
+    {
+        (EngineHost host, ProductionService service) = Create();
+        using (host)
+        using (service)
+        {
+            IReadOnlyList<CaptureDevice> devices = service.GetCaptureDevices();  // CI: none; Linux: unsupported
+            Assert.All(devices, d => Assert.False(string.IsNullOrEmpty(d.Id)));
+            if (!OperatingSystem.IsWindows()) Assert.Empty(devices);
         }
     }
 }

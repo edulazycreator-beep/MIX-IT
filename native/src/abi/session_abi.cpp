@@ -5,8 +5,11 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "abi/abi_common.hpp"
+#include "core/last_error.hpp"
+#include "media/capture_source.hpp"
 #include "media/file_source.hpp"
 #include "media/session.hpp"
 
@@ -24,6 +27,8 @@ static_assert(offsetof(mixit_session_stats, video_latency_max_ns) == 88);
 static_assert(sizeof(mixit_input_stats) == 128);
 static_assert(offsetof(mixit_input_stats, decode_errors) == 112);
 static_assert(sizeof(mixit_file_source_config) == 16);
+static_assert(sizeof(mixit_capture_device_info) == 648);
+static_assert(sizeof(mixit_capture_source_config) == 32);
 
 // Size of mixit_input_stats as defined by API 0.2 (before appended fields).
 constexpr std::uint32_t kInputStatsV02Size = 112;
@@ -178,6 +183,65 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_add_file_source(mixit_session se
         options.loop = (config->flags & MIXIT_FILE_SOURCE_LOOP) != 0;
         std::unique_ptr<media::MediaSource> source;
         if (Status st = media::open_file_source(config->path, options, h->engine->logger(), source); !st.is_ok()) {
+            return report(fn, st);
+        }
+        return report(fn, h->session->add_source(std::move(source), *out_input_id));
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_enumerate_capture_devices(mixit_engine engine, mixit_capture_device_info* devices,
+                                                                   uint32_t capacity, uint32_t* out_count) {
+    constexpr const char* fn = "mixit_enumerate_capture_devices";
+    if (out_count == nullptr) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_count is NULL");
+    *out_count = 0;
+    if (capacity > 0 && devices == nullptr) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "devices is NULL");
+    for (uint32_t i = 0; i < capacity; ++i) {
+        if (devices[i].struct_size < sizeof(mixit_capture_device_info)) {
+            return fail(fn, MIXIT_E_INVALID_ARGUMENT, "devices[i].struct_size too small");
+        }
+    }
+    return guarded(fn, [&]() -> mixit_result {
+        const auto e = mixit::abi::resolve_engine(engine);
+        if (!e) return fail(fn, MIXIT_E_INVALID_HANDLE, "invalid engine handle");
+        std::vector<media::CaptureDeviceInfo> found;
+        if (Status st = media::enumerate_capture_devices(e->logger(), found); !st.is_ok()) return report(fn, st);
+        *out_count = static_cast<uint32_t>(found.size());
+        for (uint32_t i = 0; i < capacity && i < found.size(); ++i) {
+            mixit_capture_device_info info{};
+            info.struct_size = sizeof(info);
+            mixit::copy_utf8_truncated(info.name, sizeof(info.name), found[i].name);
+            if (found[i].id.size() >= sizeof(info.id)) continue;  // an id must never be truncated
+            std::memcpy(info.id, found[i].id.c_str(), found[i].id.size() + 1);
+            devices[i] = info;
+        }
+        return MIXIT_OK;
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_capture_source(mixit_session session,
+                                                                    const mixit_capture_source_config* config,
+                                                                    uint32_t* out_input_id) {
+    constexpr const char* fn = "mixit_session_add_capture_source";
+    if (out_input_id == nullptr) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_input_id is NULL");
+    *out_input_id = 0;
+    if (!struct_size_ok(config)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "config NULL or struct_size too small");
+    if (config->device_id == nullptr || config->device_id[0] == '\0') {
+        return fail(fn, MIXIT_E_INVALID_ARGUMENT, "device_id is NULL or empty");
+    }
+    if (config->flags != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown flags");
+    if (config->frame_rate_num != 0 && config->frame_rate_den == 0) {
+        return fail(fn, MIXIT_E_INVALID_ARGUMENT, "frame_rate_den is 0");
+    }
+    return guarded(fn, [&]() -> mixit_result {
+        const auto h = session == nullptr ? nullptr : session_registry().find(to_id(session));
+        if (!h) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        media::CaptureOptions options;
+        options.device_id = config->device_id;
+        options.width = config->width;
+        options.height = config->height;
+        options.frame_rate = {config->frame_rate_num, config->frame_rate_num == 0 ? 1u : config->frame_rate_den};
+        std::unique_ptr<media::MediaSource> source;
+        if (Status st = media::open_capture_source(options, h->engine->logger(), source); !st.is_ok()) {
             return report(fn, st);
         }
         return report(fn, h->session->add_source(std::move(source), *out_input_id));

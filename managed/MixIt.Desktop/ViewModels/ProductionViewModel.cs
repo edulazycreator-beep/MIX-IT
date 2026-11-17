@@ -130,6 +130,7 @@ public sealed class ProductionViewModel : ObservableObject
     private bool _active;
     private int _statsCountdown;
     private bool _useGpu;
+    private CaptureDevice? _selectedCaptureDevice;
 
     public ProductionViewModel(ProductionService production, EngineHost host, ILogger<ProductionViewModel> logger)
     {
@@ -145,6 +146,9 @@ public sealed class ProductionViewModel : ObservableObject
         AutoCommand = new RelayCommand(_ => Guard(Auto), _ => IsRunning);
         AddTestSignalCommand = new RelayCommand(_ => Guard(() => _production.AddTestSignal()), _ => CanEditInputs);
         AddMediaFileCommand = new RelayCommand(_ => Guard(AddMediaFile), _ => CanEditInputs);
+        AddCaptureDeviceCommand = new RelayCommand(_ => Guard(() => _production.AddCaptureDevice(_selectedCaptureDevice!)),
+            _ => CanEditInputs && _selectedCaptureDevice is not null);
+        RefreshCaptureDevicesCommand = new RelayCommand(_ => Guard(RefreshCaptureDevices), _ => _host.State == EngineHostState.Running);
 
         _timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = MonitorInterval };
         _timer.Tick += (_, _) => OnTimer();
@@ -152,6 +156,7 @@ public sealed class ProductionViewModel : ObservableObject
         _host.StateChanged += (_, state) => Application.Current?.Dispatcher.InvokeAsync(() =>
         {
             _production.HandleEngineStateChanged(state);
+            if (state == EngineHostState.Running) Guard(RefreshCaptureDevices);
             CommandManager.InvalidateRequerySuggested();
             StartStopCommand.RaiseCanExecuteChanged();
         });
@@ -170,6 +175,17 @@ public sealed class ProductionViewModel : ObservableObject
     public ICommand AutoCommand { get; }
     public ICommand AddTestSignalCommand { get; }
     public ICommand AddMediaFileCommand { get; }
+    public ICommand AddCaptureDeviceCommand { get; }
+    public ICommand RefreshCaptureDevicesCommand { get; }
+
+    /// <summary>Webcams / capture cards found by the last refresh (EXPERIMENTAL).</summary>
+    public ObservableCollection<CaptureDevice> CaptureDevices { get; } = [];
+
+    public CaptureDevice? SelectedCaptureDevice
+    {
+        get => _selectedCaptureDevice;
+        set => SetProperty(ref _selectedCaptureDevice, value);
+    }
 
     public bool IsRunning => _production.IsRunning;
     public bool CanEditInputs => _production.CanEditInputs && _host.State == EngineHostState.Running;
@@ -295,6 +311,14 @@ public sealed class ProductionViewModel : ObservableObject
             Filter = "Media files|*.mp4;*.mov;*.mkv;*.avi;*.mxf;*.ts;*.m4v;*.webm;*.mp3;*.wav;*.m4a|All files|*.*",
         };
         if (dialog.ShowDialog() == true) _production.AddMediaFile(dialog.FileName, loop: true);
+    }
+
+    private void RefreshCaptureDevices()
+    {
+        CaptureDevices.Clear();
+        foreach (CaptureDevice d in _production.GetCaptureDevices()) CaptureDevices.Add(d);
+        SelectedCaptureDevice = CaptureDevices.FirstOrDefault();
+        if (CaptureDevices.Count == 0) Status = "No capture devices found.";
     }
 
     private void SyncFromService()

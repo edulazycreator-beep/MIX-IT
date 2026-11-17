@@ -27,7 +27,9 @@ internal static class SessionSoak
                 Width = Math.Max(64, format.Width / 2 / 2 * 2), Height = Math.Max(64, format.Height / 2 / 2 * 2),
                 FrameRate = MediaRate.Fps25, ToneHz = 440,
             })
-            : session.AddFileSource(file, loop: true);
+            : file.StartsWith("capture:", StringComparison.Ordinal)
+                ? session.AddCaptureSource(file["capture:".Length..])
+                : session.AddFileSource(file, loop: true);
         session.SetProgramInput(main);
         session.SetPreviewInput(second);
         // Picture-in-picture of input 2 on program for the whole run: exercises
@@ -40,7 +42,9 @@ internal static class SessionSoak
 
         Console.WriteLine($"Session soak: {format.Width}x{format.Height} @ {format.FrameRate} fps for {seconds} s " +
                           (file is null ? $"(input {main}: same format + sync flash; input {second}: half size @ 25 fps)"
-                                        : $"(input {main}: same format + sync flash; input {second}: file '{file}', looping)"));
+                                        : file.StartsWith("capture:", StringComparison.Ordinal)
+                                            ? $"(input {main}: same format + sync flash; input {second}: capture device, EXPERIMENTAL)"
+                                            : $"(input {main}: same format + sync flash; input {second}: file '{file}', looping)"));
         Console.WriteLine("Sequence: PiP layer throughout; preview watched every second; mix to input 2 at T/2, cut back at T/2+2.");
         Console.WriteLine("   t  ticks  late  black  latency(ms)  in1 drop/rep/skip  in2 rep/skip  A/V max(us)  pgm composited");
 

@@ -318,3 +318,38 @@ TEST(Buses, SessionConfigCompatibilityAndValidation) {
     EXPECT_EQ(mixit_session_create(engine, &sc, &session), MIXIT_E_INVALID_ARGUMENT);
     EXPECT_EQ(mixit_engine_destroy(engine), MIXIT_OK);
 }
+
+TEST(Capture, EnumerationAndValidation) {
+    Studio s;
+    uint32_t count = 99;
+#if defined(_WIN32)
+    // CI machines have no camera; the call must still succeed (count may be 0).
+    const mixit_result r = mixit_enumerate_capture_devices(s.engine, nullptr, 0, &count);
+    ASSERT_TRUE(r == MIXIT_OK || r == MIXIT_E_NOT_SUPPORTED) << last_error();  // NOT_SUPPORTED: Windows N without MF
+    if (r == MIXIT_OK && count > 0) {
+        std::vector<mixit_capture_device_info> devices(count);
+        for (auto& d : devices) d.struct_size = sizeof(d);
+        ASSERT_EQ(mixit_enumerate_capture_devices(s.engine, devices.data(), count, &count), MIXIT_OK);
+        EXPECT_NE(devices[0].id[0], '\0');
+    }
+    mixit_capture_source_config c{};
+    c.struct_size = sizeof(c);
+    c.device_id = "\\\\?\\no-such-device";
+    uint32_t id = 0;
+    const mixit_result add = mixit_session_add_capture_source(s.session, &c, &id);
+    EXPECT_TRUE(add == MIXIT_E_NOT_FOUND || add == MIXIT_E_NOT_SUPPORTED) << last_error();
+#else
+    EXPECT_EQ(mixit_enumerate_capture_devices(s.engine, nullptr, 0, &count), MIXIT_E_NOT_SUPPORTED);
+    EXPECT_EQ(count, 0u);
+    mixit_capture_source_config c{};
+    c.struct_size = sizeof(c);
+    c.device_id = "anything";
+    uint32_t id = 0;
+    EXPECT_EQ(mixit_session_add_capture_source(s.session, &c, &id), MIXIT_E_NOT_SUPPORTED);
+#endif
+    c.device_id = "";
+    EXPECT_EQ(mixit_session_add_capture_source(s.session, &c, &id), MIXIT_E_INVALID_ARGUMENT);
+    mixit_capture_device_info small{};
+    small.struct_size = 8;
+    EXPECT_EQ(mixit_enumerate_capture_devices(s.engine, &small, 1, &count), MIXIT_E_INVALID_ARGUMENT);
+}

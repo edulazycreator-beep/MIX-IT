@@ -18,6 +18,8 @@ internal static class Program
         string? soakFile = null;
         SessionConfiguration soakFormat = new() { Width = 1280, Height = 720, FrameRate = MediaRate.Fps29_97 };
         CompositorPreference compositor = CompositorPreference.Auto;
+        bool listCapture = false;
+        int? captureIndex = null;
         for (int i = 0; i < args.Length; i++)
         {
             switch (args[i])
@@ -31,6 +33,11 @@ internal static class Program
                     i++;
                     break;
                 case "--file" when i + 1 < args.Length: soakFile = args[++i]; break;
+                case "--list-capture": listCapture = true; break;
+                case "--capture" when i + 1 < args.Length && int.TryParse(args[i + 1], out int ci) && ci >= 0:
+                    captureIndex = ci;
+                    i++;
+                    break;
                 case "--format" when i + 1 < args.Length:
                     SessionConfiguration? f = SessionSoak.ParseFormat(args[++i]);
                     if (f is null)
@@ -55,7 +62,8 @@ internal static class Program
                 case "-h" or "--help":
                     Console.WriteLine("usage: mixit-probe [--json] [--verbose] [--log-file <path>] [--codecs]");
                     Console.WriteLine("                   [--session-test <seconds> [--format WxH@num[/den]] [--file <media file>]");
-                    Console.WriteLine("                                   [--compositor auto|cpu|d3d11|warp]]");
+                    Console.WriteLine("                                   [--compositor auto|cpu|d3d11|warp] [--capture <index>]]");
+                    Console.WriteLine("                   [--list-capture]");
                     return 0;
                 default:
                     Console.Error.WriteLine($"unknown argument: {args[i]}");
@@ -75,6 +83,27 @@ internal static class Program
             host.Start();
             SystemCapabilities caps = host.DetectCapabilities();
             int soakResult = 0;
+            if (listCapture || captureIndex is not null)
+            {
+                IReadOnlyList<CaptureDevice> devices = host.EnumerateCaptureDevices();
+                if (listCapture)
+                {
+                    Console.WriteLine(devices.Count == 0 ? "No capture devices found (or capture unsupported here)." : "Capture devices:");
+                    for (int d = 0; d < devices.Count; d++) Console.WriteLine($"  [{d}] {devices[d].Name}");
+                    if (soakSeconds == 0)
+                    {
+                        host.Stop();
+                        return 0;
+                    }
+                }
+                if (captureIndex is int index && index >= devices.Count)
+                {
+                    Console.Error.WriteLine($"--capture {index}: only {devices.Count} device(s) found");
+                    host.Stop();
+                    return 2;
+                }
+                if (captureIndex is int chosen) soakFile = "capture:" + devices[chosen].Id;
+            }
             if (soakSeconds > 0)
             {
                 soakResult = SessionSoak.Run(host, soakSeconds, soakFormat with { Compositor = compositor }, soakFile);

@@ -183,6 +183,34 @@ public sealed unsafe class NativeEngine : IDisposable
         return new NativeSession(session);
     }
 
+    /// <summary>
+    /// Connected video capture devices (EXPERIMENTAL; Windows Media Foundation).
+    /// Empty when there are none; throws with <see cref="NativeResult.NotSupported"/>
+    /// where no capture backend exists.
+    /// </summary>
+    public IReadOnlyList<CaptureDevice> EnumerateCaptureDevices()
+    {
+        uint count = 0;
+        Check(NativeMethods.mixit_enumerate_capture_devices(_handle, null, 0, &count), "mixit_enumerate_capture_devices");
+        if (count == 0) return [];
+        var raw = new MixitCaptureDeviceInfo[count + 4];  // devices may appear between the two calls
+        for (int i = 0; i < raw.Length; i++) raw[i].StructSize = (uint)sizeof(MixitCaptureDeviceInfo);
+        fixed (MixitCaptureDeviceInfo* p = raw)
+        {
+            Check(NativeMethods.mixit_enumerate_capture_devices(_handle, p, (uint)raw.Length, &count), "mixit_enumerate_capture_devices");
+        }
+        var list = new List<CaptureDevice>();
+        for (int i = 0; i < Math.Min(count, (uint)raw.Length); i++)
+        {
+            fixed (MixitCaptureDeviceInfo* d = &raw[i])
+            {
+                string id = Utf8.FromNullTerminated(d->Id, 512);
+                if (id.Length > 0) list.Add(new CaptureDevice(id, Utf8.FromNullTerminated(d->Name, 128)));
+            }
+        }
+        return list;
+    }
+
     /// <summary>FFmpeg availability, versions and licence verdict for this engine build.</summary>
     public static MediaLibraryInfo GetMediaLibraryInfo()
     {

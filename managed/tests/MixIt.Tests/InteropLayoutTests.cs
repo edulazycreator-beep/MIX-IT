@@ -28,6 +28,8 @@ public class InteropLayoutTests
         Assert.Equal(NativeStructSizes.CodecInfo, Unsafe.SizeOf<MixitCodecInfo>());
         Assert.Equal(NativeStructSizes.FileSourceConfig, Unsafe.SizeOf<MixitFileSourceConfig>());
         Assert.Equal(NativeStructSizes.LayerConfig, Unsafe.SizeOf<MixitLayerConfig>());
+        Assert.Equal(NativeStructSizes.CaptureDeviceInfo, Unsafe.SizeOf<MixitCaptureDeviceInfo>());
+        Assert.Equal(NativeStructSizes.CaptureSourceConfig, Unsafe.SizeOf<MixitCaptureSourceConfig>());
     }
 
     [Fact]

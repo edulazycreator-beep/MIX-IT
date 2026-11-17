@@ -121,6 +121,19 @@ public sealed class EngineHost : IDisposable
     /// <summary>Lifecycle step 3: creates a production session (engine must be running).</summary>
     public NativeSession CreateSession(SessionConfiguration configuration) => RequireEngine().CreateSession(configuration);
 
+    /// <summary>Connected video capture devices (EXPERIMENTAL). Empty where capture is unsupported.</summary>
+    public IReadOnlyList<CaptureDevice> EnumerateCaptureDevices()
+    {
+        try
+        {
+            return RequireEngine().EnumerateCaptureDevices();
+        }
+        catch (MixItNativeException ex) when (ex.Result == NativeResult.NotSupported)
+        {
+            return [];
+        }
+    }
+
     /// <summary>Engine health counters, or null when no engine is running.</summary>
     public EngineDiagnostics? GetDiagnostics()
     {

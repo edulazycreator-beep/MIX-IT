@@ -225,6 +225,35 @@ public sealed unsafe class NativeSession : IDisposable
         }
     }
 
+    /// <summary>
+    /// Adds a video capture device input (EXPERIMENTAL; only while not running).
+    /// Width/height 0 = largest mode up to 1080p; rate null = highest up to 60 fps.
+    /// </summary>
+    public uint AddCaptureSource(string deviceId, uint width = 0, uint height = 0, MediaRate? frameRate = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(deviceId);
+        byte* utf8 = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(deviceId);
+        try
+        {
+            var c = new MixitCaptureSourceConfig
+            {
+                StructSize = (uint)sizeof(MixitCaptureSourceConfig),
+                DeviceId = utf8,
+                Width = width,
+                Height = height,
+                FrameRateNum = frameRate?.Numerator ?? 0,
+                FrameRateDen = frameRate?.Denominator ?? 1,
+            };
+            uint id;
+            Check(NativeMethods.mixit_session_add_capture_source(_handle, &c, &id), "mixit_session_add_capture_source");
+            return id;
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)utf8);
+        }
+    }
+
     /// <summary>Removes an input (only while not running).</summary>
     public void RemoveInput(uint inputId) =>
         Check(NativeMethods.mixit_session_remove_input(_handle, inputId), "mixit_session_remove_input");
@@ -387,6 +416,9 @@ public sealed record MediaLibraryInfo(
     string Version,
     string License,
     Version? AvcodecVersion);
+
+/// <summary>A video capture device: <see cref="Id"/> is passed to AddCaptureSource.</summary>
+public sealed record CaptureDevice(string Id, string Name);
 
 /// <summary>A codec present in the FFmpeg build.</summary>
 public sealed record CodecInfo(string Name, bool Decoder, bool Encoder, bool Hardware, string LongName);

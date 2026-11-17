@@ -435,6 +435,44 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_add_file_source(mixit_session se
                                                                  const mixit_file_source_config* config,
                                                                  uint32_t* out_input_id);
 
+/* ---- Video capture devices (API 0.3, EXPERIMENTAL) -------------------------
+ * Windows Media Foundation video capture sources: webcams and USB/PCIe capture
+ * devices exposing a UVC / Media Foundation interface. Video only (device
+ * audio is not captured yet); frames are stamped with their arrival time.
+ * Other platforms: MIXIT_E_NOT_SUPPORTED. */
+typedef struct mixit_capture_device_info {
+    uint32_t struct_size;
+    uint32_t flags;              /* reserved, 0 */
+    char     name[128];          /* UTF-8 friendly name (truncated on a character boundary) */
+    char     id[512];            /* UTF-8 device id; pass to mixit_capture_source_config.device_id */
+} mixit_capture_device_info;
+
+/* Lists connected capture devices. Writes up to `capacity` entries (each with
+ * struct_size set by the caller) and the total count to `out_count`; call with
+ * capacity 0 to query the count. MIXIT_E_NOT_SUPPORTED: no capture backend
+ * (non-Windows, or Windows without Media Foundation). */
+MIXIT_API mixit_result MIXIT_CALL mixit_enumerate_capture_devices(mixit_engine engine, mixit_capture_device_info* devices,
+                                                                   uint32_t capacity, uint32_t* out_count);
+
+typedef struct mixit_capture_source_config {
+    uint32_t    struct_size;
+    uint32_t    flags;           /* reserved, 0 */
+    const char* device_id;       /* from mixit_capture_device_info.id */
+    uint32_t    width;           /* 0 with height 0 = largest mode up to 1920x1080 */
+    uint32_t    height;
+    uint32_t    frame_rate_num;  /* 0 = highest rate up to 60 fps (else closest not above) */
+    uint32_t    frame_rate_den;
+} mixit_capture_source_config;
+
+/* Adds a capture-device input (only while not RUNNING). The device mode is
+ * chosen now; capture runs while the session runs. If the device fails or is
+ * unplugged, the input holds its last frame, input stats count decode_errors
+ * and the engine retries every second. MIXIT_E_NOT_FOUND: no such device;
+ * MIXIT_E_NOT_SUPPORTED: no usable mode / no capture backend. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_capture_source(mixit_session session,
+                                                                    const mixit_capture_source_config* config,
+                                                                    uint32_t* out_input_id);
+
 /* Only while not RUNNING. If it was the program input, program becomes black (0). */
 MIXIT_API mixit_result MIXIT_CALL mixit_session_remove_input(mixit_session session, uint32_t input_id);
 

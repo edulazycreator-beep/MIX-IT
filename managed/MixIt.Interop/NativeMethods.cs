@@ -149,6 +149,18 @@ internal static unsafe partial class NativeMethods
     public static partial NativeResult mixit_session_copy_bus_frame(SessionHandle session, int bus, byte* buffer, uint bufferSize,
         uint stride, MixitVideoFrameInfo* info);
 
+    // ---- capture devices (API 0.3, experimental)
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_enumerate_capture_devices(EngineHandle engine, MixitCaptureDeviceInfo* devices,
+        uint capacity, uint* count);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_add_capture_source(SessionHandle session, MixitCaptureSourceConfig* config,
+        uint* inputId);
+
     // ---- media library (API 0.2)
 
     [LibraryImport(LibraryName)]
