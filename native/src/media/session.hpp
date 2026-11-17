@@ -17,7 +17,9 @@
 // media threads never take that mutex.
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <string>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -25,6 +27,7 @@
 #include <vector>
 
 #include "core/status.hpp"
+#include "media/compositor.hpp"
 #include "media/media_queue.hpp"
 #include "media/media_source.hpp"
 #include "media/media_types.hpp"
@@ -47,6 +50,22 @@ struct SessionConfig {
 };
 
 enum class SessionState : std::int32_t { Configuring = 1, Running = 2, Stopped = 3, Closed = 4 };
+
+enum class Bus : std::int32_t { Program = 0, Preview = 1 };
+
+struct LayerConfig {
+    std::uint32_t input_id = 0;  // 0 = layer disabled
+    NormRect crop;               // source region
+    NormRect dest;               // placement on the bus output
+    float opacity = 1.0f;
+};
+
+// What a bus shows: a base input (fitted with letterbox/pillarbox) and up to
+// kMaxLayersPerScene overlay layers (picture-in-picture, logos, ...).
+struct BusScene {
+    std::uint32_t base_input = 0;  // 0 = black
+    std::array<LayerConfig, kMaxLayersPerScene> layers{};
+}; 
 
 struct InputStats {
     std::uint32_t input_id = 0;
@@ -81,6 +100,12 @@ struct SessionStats {
     std::uint64_t program_pool_exhausted = 0;
     std::int64_t video_latency_last_ns = 0;    // tick time - presented program frame time
     std::int64_t video_latency_max_ns = 0;
+    std::uint32_t preview_input_id = 0;
+    std::int32_t transition_active = -1;       // TransitionKind while running, -1 otherwise
+    float transition_progress = 0.0f;
+    std::string compositor;                    // "cpu", "d3d11"
+    std::uint64_t transitions_completed = 0;
+    std::uint64_t composited_frames = 0;       // bus frames rendered by the compositor (not zero-copy)
 };
 
 struct ProgramFrameInfo {
@@ -106,7 +131,14 @@ public:
     // Adds any source (file, capture). Only while not running.
     Status add_source(std::unique_ptr<MediaSource> source, std::uint32_t& out_input_id);
     Status remove_input(std::uint32_t input_id);
-    Status set_program_input(std::uint32_t input_id);  // 0 = black
+    Status set_program_input(std::uint32_t input_id);  // 0 = black; immediate (cancels a running transition)
+    Status set_preview_input(std::uint32_t input_id);  // 0 = black
+    Status cut();                                      // swap preview and program scenes now
+    // Transition program -> preview over `frames` output frames; at the end
+    // the scenes swap (the old program becomes preview). INVALID_STATE if a
+    // transition is already running; Cut or 0 frames is an immediate cut.
+    Status start_transition(TransitionKind kind, std::uint32_t frames);
+    Status set_layer(Bus bus, std::uint32_t index, const LayerConfig& layer);
     Status start();
     Status stop();
     void close() noexcept;  // stop + refuse further use (engine shutdown)
@@ -119,7 +151,13 @@ public:
     // Copies the most recent program frame (BGRA) into `dest`.
     // NOT_FOUND if none has been produced yet; BUFFER_TOO_SMALL if dest is too small.
     Status copy_program_frame(std::uint8_t* dest, std::size_t dest_size, std::uint32_t dest_stride,
-                              ProgramFrameInfo& info);
+                              ProgramFrameInfo& info) {
+        return copy_bus_frame(Bus::Program, dest, dest_size, dest_stride, info);
+    }
+    // Preview frames are rendered only while someone reads them: the first
+    // request after a pause returns NOT_FOUND until the next output tick.
+    Status copy_bus_frame(Bus bus, std::uint8_t* dest, std::size_t dest_size, std::uint32_t dest_stride,
+                          ProgramFrameInfo& info);
 
     // Frames/blocks currently held by pools (0 after stop: no leaks).
     [[nodiscard]] std::uint32_t pooled_items_in_use() const;
@@ -137,6 +175,15 @@ private:
     void sync_input(Input& input, std::int64_t target_ns) noexcept;
     void consume_audio(Input& input) noexcept;
     void stop_threads() noexcept;
+    struct Transition {
+        bool active = false;
+        TransitionKind kind = TransitionKind::Cut;
+        std::uint32_t total = 0;
+        std::uint32_t elapsed = 0;
+    };
+    SceneDraw build_draw(const BusScene& scene) const noexcept;
+    bool render_bus(const BusScene& a, const BusScene* b, TransitionKind kind, float progress, std::int64_t target,
+                    std::uint64_t tick, ProgramFrame& out) noexcept;
     Input* find_input(std::uint32_t id) const noexcept;
     Status add_input_locked(std::unique_ptr<MediaSource> source, std::uint32_t& out_input_id);
 
@@ -148,14 +195,24 @@ private:
     std::atomic<SessionState> state_{SessionState::Configuring};
     std::vector<std::unique_ptr<Input>> inputs_;  // changed only while not running
     std::uint32_t next_input_id_ = 1;
-    std::atomic<std::uint32_t> program_input_id_{0};
 
     std::unique_ptr<VideoFramePool> program_pool_;
+    std::unique_ptr<Compositor> compositor_;  // output thread only (after start)
     VideoRef black_frame_;
     MediaQueue<ProgramFrame> program_out_{2, OverflowPolicy::DropOldest};
+    MediaQueue<ProgramFrame> preview_out_{2, OverflowPolicy::DropOldest};
+
+    // Scenes and transition: written by control calls, read/advanced by the
+    // output thread at tick start (short critical sections only).
+    mutable std::mutex scene_mutex_;
+    BusScene program_scene_;
+    BusScene preview_scene_;
+    Transition transition_;
+    std::atomic<std::int64_t> preview_requested_ns_{-1'000'000'000'000LL};
 
     std::mutex consumer_mutex_;
-    ProgramFrame program_cache_;  // latest frame handed to readers (guarded by consumer_mutex_)
+    ProgramFrame program_cache_;  // latest frames handed to readers (guarded by consumer_mutex_)
+    ProgramFrame preview_cache_;
 
     std::atomic<bool> stop_requested_{false};
     std::thread output_thread_;
@@ -166,6 +223,7 @@ private:
     std::atomic<std::int64_t> max_tick_lateness_ns_{0};
     std::atomic<std::uint64_t> program_frames_{0}, program_black_frames_{0}, program_pool_exhausted_{0};
     std::atomic<std::int64_t> video_latency_last_ns_{0}, video_latency_max_ns_{0};
+    std::atomic<std::uint64_t> transitions_completed_{0}, composited_frames_{0};
 };
 
 }  // namespace mixit::media

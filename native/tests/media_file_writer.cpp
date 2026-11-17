@@ -45,6 +45,10 @@ struct Output {
             const int r = avcodec_receive_packet(enc, pkt);
             if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) return {};
             if (r < 0) return "receive_packet: " + err_text(r);
+            // Some encoders leave packet durations unset (FFmpeg 9 mpeg4);
+            // the MP4 muxer would then write a zero-length last sample that
+            // the edit list excludes, silently dropping the final frame.
+            if (pkt->duration == 0 && enc->codec_type == AVMEDIA_TYPE_VIDEO) pkt->duration = 1;
             av_packet_rescale_ts(pkt, enc->time_base, st->time_base);
             pkt->stream_index = st->index;
             if (const int w = av_interleaved_write_frame(oc, pkt); w < 0) return "write: " + err_text(w);
@@ -162,6 +166,7 @@ std::string write_test_media(const TestMediaSpec& spec) {
                 sws_scale(sws, src, src_stride, 0, o.venc->height, frame->data, frame->linesize);
             }
             frame->pts = next_frame++;
+            frame->duration = 1;
             if (avcodec_send_frame(o.venc, frame) < 0) error = "send video frame";
             else error = o.drain(o.venc, o.vst);
         } else {
@@ -183,6 +188,7 @@ std::string write_test_media(const TestMediaSpec& spec) {
                 }
             }
             frame->pts = next_sample;
+            frame->duration = n;
             next_sample += n;
             if (avcodec_send_frame(o.aenc, frame) < 0) error = "send audio frame";
             else error = o.drain(o.aenc, o.ast);

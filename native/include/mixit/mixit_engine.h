@@ -346,6 +346,13 @@ typedef struct mixit_session_stats {
     uint64_t program_pool_exhausted;
     int64_t  video_latency_last_ns;  /* tick time - presented source frame time */
     int64_t  video_latency_max_ns;
+    /* API 0.3 — appended; filled only if the caller's struct_size covers them */
+    uint32_t preview_input_id;
+    int32_t  transition_active;      /* MIXIT_TRANSITION_* while running, -1 otherwise */
+    float    transition_progress;    /* 0..1 while a transition runs */
+    int32_t  compositor;             /* MIXIT_COMPOSITOR_* */
+    uint64_t transitions_completed;  /* cuts + finished transitions */
+    uint64_t composited_frames;      /* bus frames rendered by the compositor (others are zero-copy) */
 } mixit_session_stats;
 
 typedef struct mixit_input_stats {
@@ -417,8 +424,58 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_add_file_source(mixit_session se
 MIXIT_API mixit_result MIXIT_CALL mixit_session_remove_input(mixit_session session, uint32_t input_id);
 
 /* Selects the program input (0 = black). Allowed while RUNNING; takes
- * effect at the next output tick (a cut). */
+ * effect at the next output tick (a cut). Cancels a running transition. */
 MIXIT_API mixit_result MIXIT_CALL mixit_session_set_program_input(mixit_session session, uint32_t input_id);
+
+/* ---- Buses, transitions and layers (API 0.3) ---------------------------- */
+
+#define MIXIT_BUS_PROGRAM 0
+#define MIXIT_BUS_PREVIEW 1
+
+#define MIXIT_TRANSITION_CUT  0
+#define MIXIT_TRANSITION_MIX  1   /* cross-dissolve */
+#define MIXIT_TRANSITION_FADE 2   /* through black */
+#define MIXIT_TRANSITION_WIPE 3   /* left to right */
+
+#define MIXIT_COMPOSITOR_CPU   0
+#define MIXIT_COMPOSITOR_D3D11 1
+
+#define MIXIT_MAX_LAYERS 8
+
+/* Geometry is normalized: 0..1 of the source (crop) or of the bus output
+ * (dest). Floats are 32-bit IEEE-754. A layer is drawn above the bus's base
+ * input; layers draw in index order. */
+typedef struct mixit_layer_config {
+    uint32_t struct_size;
+    uint32_t input_id;            /* 0 = disable the layer */
+    float    crop_x, crop_y, crop_w, crop_h;   /* source region, within 0..1 */
+    float    dest_x, dest_y, dest_w, dest_h;   /* placement on the bus */
+    float    opacity;             /* 0..1, multiplied with the source alpha */
+    uint32_t reserved;            /* must be 0 */
+} mixit_layer_config;
+
+/* Selects the preview input (0 = black). Any time. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_preview_input(mixit_session session, uint32_t input_id);
+
+/* Swaps preview and program now (completes a running transition). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_cut(mixit_session session);
+
+/* Transitions program -> preview over `duration_frames` output frames
+ * (<= 600); at the end preview and program swap. MIXIT_TRANSITION_CUT or 0
+ * frames is an immediate cut. MIXIT_E_INVALID_STATE if one is running. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_start_transition(mixit_session session, int32_t kind,
+                                                                  uint32_t duration_frames);
+
+/* Sets layer `index` (0..MIXIT_MAX_LAYERS-1) of a bus. Any time. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_layer(mixit_session session, int32_t bus, uint32_t index,
+                                                           const mixit_layer_config* layer);
+
+/* Like mixit_session_copy_program_frame for any bus. The preview bus is only
+ * rendered while it is being read: after a pause the first call returns
+ * MIXIT_E_NOT_FOUND until the next output tick. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_copy_bus_frame(mixit_session session, int32_t bus, uint8_t* buffer,
+                                                                uint32_t buffer_size, uint32_t stride,
+                                                                mixit_video_frame_info* out_info);
 
 /* Lifecycle step 6 / 7. Both are idempotent. */
 MIXIT_API mixit_result MIXIT_CALL mixit_session_start(mixit_session session);

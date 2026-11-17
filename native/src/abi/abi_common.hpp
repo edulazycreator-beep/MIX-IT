@@ -59,6 +59,22 @@ void write_out(T* dest, const T& value) noexcept {
     dest->struct_size = caller_size;
 }
 
+// For structs that grew by appending fields: accepts callers whose
+// struct_size is at least `min_size` (an older API's size) and writes only
+// the bytes they declared.
+template <typename T>
+bool struct_size_at_least(const T* p, std::uint32_t min_size) noexcept {
+    return p != nullptr && p->struct_size >= min_size;
+}
+
+template <typename T>
+void write_out_prefix(T* dest, const T& value) noexcept {
+    static_assert(std::is_trivially_copyable_v<T>);
+    const std::uint32_t caller_size = dest->struct_size;
+    std::memcpy(dest, &value, caller_size < sizeof(T) ? caller_size : sizeof(T));
+    dest->struct_size = caller_size;
+}
+
 template <typename Handle>
 std::uint64_t to_id(Handle handle) noexcept {
     return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(handle));

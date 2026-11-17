@@ -20,7 +20,8 @@ constexpr std::uint32_t kInputVideoPool = kInputVideoQueue + 8;
 constexpr std::uint32_t kInputAudioQueue = 32;  // 320 ms of 10 ms blocks
 // queue + file read-ahead (24) + margin
 constexpr std::uint32_t kInputAudioPool = kInputAudioQueue + 32;
-constexpr std::uint32_t kDefaultProgramPool = 8;
+// program out (2) + reader cache (1) + preview out (2) + cache (1) + black (1) + in flight (1) + margin
+constexpr std::uint32_t kDefaultProgramPool = 10;
 constexpr std::int64_t kAvMatchWindowNs = 100'000'000;
 constexpr std::int64_t kFlashExpiryNs = 500'000'000;
 
@@ -52,17 +53,6 @@ bool looks_like_flash(const VideoFrame& f) noexcept {
         if (px[0] < 230 || px[1] < 230 || px[2] < 230) return false;
     }
     return true;
-}
-
-void scale_nearest(const VideoFrame& src, VideoFrame& dst) noexcept {
-    for (std::uint32_t y = 0; y < dst.height; ++y) {
-        const std::uint32_t sy = static_cast<std::uint32_t>(static_cast<std::uint64_t>(y) * src.height / dst.height);
-        const auto* srow = reinterpret_cast<const std::uint32_t*>(src.data + static_cast<std::size_t>(sy) * src.stride);
-        auto* drow = reinterpret_cast<std::uint32_t*>(dst.data + static_cast<std::size_t>(y) * dst.stride);
-        for (std::uint32_t x = 0; x < dst.width; ++x) {
-            drow[x] = srow[static_cast<std::uint64_t>(x) * src.width / dst.width];
-        }
-    }
 }
 
 }  // namespace
@@ -133,6 +123,7 @@ Status Session::create(const SessionConfig& config, Logger& logger, std::unique_
     const std::uint32_t pool = config.program_pool_frames == 0 ? kDefaultProgramPool : config.program_pool_frames;
     if (pool < 5 || pool > 64) return {MIXIT_E_INVALID_ARGUMENT, "program_pool_frames must be 5..64"};
     s->program_pool_ = std::make_unique<VideoFramePool>(config.width, config.height, pool);
+    s->compositor_ = make_cpu_compositor();
     // Latency of frame sync: one output period plus 2 ms scheduling margin.
     s->latency_ns_ = duration_of_index(0, config.frame_rate) + 2'000'000;
     logger.logf(MIXIT_LOG_INFO, "session", "session created: {}x{} @ {} fps, {} Hz x{} ch", config.width,
@@ -210,14 +201,24 @@ Status Session::remove_input(std::uint32_t input_id) {
     }
     const auto it = std::find_if(inputs_.begin(), inputs_.end(), [&](const auto& in) { return in->id == input_id; });
     if (it == inputs_.end()) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(input_id)};
-    // Release any program frames that may reference this input's pool.
+    // Release any bus frames that may reference this input's pool.
     program_out_.clear();
+    preview_out_.clear();
     {
         std::lock_guard consumer(consumer_mutex_);
         program_cache_ = ProgramFrame{};
+        preview_cache_ = ProgramFrame{};
     }
     inputs_.erase(it);
-    if (program_input_id_.load() == input_id) program_input_id_.store(0);
+    {
+        std::lock_guard scenes(scene_mutex_);
+        for (BusScene* scene : {&program_scene_, &preview_scene_}) {
+            if (scene->base_input == input_id) scene->base_input = 0;
+            for (LayerConfig& l : scene->layers) {
+                if (l.input_id == input_id) l = LayerConfig{};
+            }
+        }
+    }
     logger_.logf(MIXIT_LOG_INFO, "session", "input {} removed", input_id);
     return Status::ok();
 }
@@ -228,7 +229,82 @@ Status Session::set_program_input(std::uint32_t input_id) {
     if (input_id != 0 && find_input(input_id) == nullptr) {
         return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(input_id)};
     }
-    program_input_id_.store(input_id, std::memory_order_release);
+    std::lock_guard scenes(scene_mutex_);
+    program_scene_.base_input = input_id;
+    transition_.active = false;  // a direct selection always wins
+    return Status::ok();
+}
+
+Status Session::set_preview_input(std::uint32_t input_id) {
+    std::lock_guard lock(control_mutex_);
+    if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
+    if (input_id != 0 && find_input(input_id) == nullptr) {
+        return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(input_id)};
+    }
+    std::lock_guard scenes(scene_mutex_);
+    preview_scene_.base_input = input_id;
+    return Status::ok();
+}
+
+Status Session::cut() {
+    std::lock_guard lock(control_mutex_);
+    if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
+    std::lock_guard scenes(scene_mutex_);
+    if (transition_.active) {
+        // CUT during a transition completes it immediately (operators expect
+        // CUT to always act).
+        transition_.active = false;
+    }
+    std::swap(program_scene_, preview_scene_);
+    transitions_completed_.fetch_add(1, std::memory_order_relaxed);
+    return Status::ok();
+}
+
+Status Session::start_transition(TransitionKind kind, std::uint32_t frames) {
+    if (kind != TransitionKind::Cut && kind != TransitionKind::Mix && kind != TransitionKind::Fade &&
+        kind != TransitionKind::Wipe) {
+        return {MIXIT_E_INVALID_ARGUMENT, "unknown transition kind"};
+    }
+    if (frames > 600) return {MIXIT_E_INVALID_ARGUMENT, "transition duration must be at most 600 frames"};
+    if (kind == TransitionKind::Cut || frames == 0) return cut();
+    std::lock_guard lock(control_mutex_);
+    if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
+    std::lock_guard scenes(scene_mutex_);
+    if (transition_.active) return {MIXIT_E_INVALID_STATE, "a transition is already running"};
+    if (state() != SessionState::Running) {
+        // Nothing is being rendered: the end state is the same as a cut.
+        std::swap(program_scene_, preview_scene_);
+        transitions_completed_.fetch_add(1, std::memory_order_relaxed);
+        return Status::ok();
+    }
+    transition_ = Transition{true, kind, frames, 0};
+    return Status::ok();
+}
+
+Status Session::set_layer(Bus bus, std::uint32_t index, const LayerConfig& layer) {
+    if (bus != Bus::Program && bus != Bus::Preview) return {MIXIT_E_INVALID_ARGUMENT, "unknown bus"};
+    if (index >= kMaxLayersPerScene) {
+        return {MIXIT_E_INVALID_ARGUMENT, "layer index must be below " + std::to_string(kMaxLayersPerScene)};
+    }
+    auto valid_rect = [](const NormRect& r) {
+        return r.w > 0.0f && r.h > 0.0f && r.x >= -4.0f && r.y >= -4.0f && r.x + r.w <= 5.0f && r.y + r.h <= 5.0f;
+    };
+    auto valid_crop = [](const NormRect& r) {
+        return r.w > 0.0f && r.h > 0.0f && r.x >= 0.0f && r.y >= 0.0f && r.x + r.w <= 1.0001f && r.y + r.h <= 1.0001f;
+    };
+    if (layer.input_id != 0) {
+        if (!valid_rect(layer.dest)) return {MIXIT_E_INVALID_ARGUMENT, "layer destination rectangle out of range"};
+        if (!valid_crop(layer.crop)) return {MIXIT_E_INVALID_ARGUMENT, "layer crop must lie within the source (0..1)"};
+        if (!(layer.opacity >= 0.0f && layer.opacity <= 1.0f)) return {MIXIT_E_INVALID_ARGUMENT, "opacity must be 0..1"};
+    }
+    std::lock_guard lock(control_mutex_);
+    if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
+    if (layer.input_id != 0 && find_input(layer.input_id) == nullptr) {
+        return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(layer.input_id)};
+    }
+    std::lock_guard scenes(scene_mutex_);
+    BusScene& scene = bus == Bus::Program ? program_scene_ : preview_scene_;
+    scene.layers[index] = layer.input_id == 0 ? LayerConfig{} : layer;
     return Status::ok();
 }
 
@@ -263,8 +339,13 @@ Status Session::start() {
         return {MIXIT_E_PLATFORM, std::string("cannot start session threads: ") + e.what()};
     }
     state_.store(SessionState::Running, std::memory_order_release);
-    logger_.logf(MIXIT_LOG_INFO, "session", "session started with {} input(s), program input {}", inputs_.size(),
-                 program_input_id_.load());
+    std::uint32_t program_input = 0;
+    {
+        std::lock_guard scenes(scene_mutex_);
+        program_input = program_scene_.base_input;
+    }
+    logger_.logf(MIXIT_LOG_INFO, "session", "session started with {} input(s), program input {}, compositor {}",
+                 inputs_.size(), program_input, compositor_->name());
     return Status::ok();
 }
 
@@ -277,8 +358,18 @@ void Session::stop_threads() noexcept {
     // Return every pooled item: queues, frame-sync state, program output.
     for (auto& in : inputs_) in->reset_runtime_state();
     program_out_.clear();
+    preview_out_.clear();
+    {
+        std::lock_guard scenes(scene_mutex_);
+        if (transition_.active) {  // stopping mid-transition: land on the end state
+            std::swap(program_scene_, preview_scene_);
+            transition_.active = false;
+            transitions_completed_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     std::lock_guard consumer(consumer_mutex_);
     program_cache_ = ProgramFrame{};
+    preview_cache_ = ProgramFrame{};
 }
 
 Status Session::stop() {
@@ -359,11 +450,84 @@ void Session::consume_audio(Input& in) noexcept {
     }
 }
 
+SceneDraw Session::build_draw(const BusScene& scene) const noexcept {
+    SceneDraw d;
+    auto current_of = [this](std::uint32_t id) -> const VideoFrame* {
+        if (id == 0) return nullptr;
+        const Input* in = find_input(id);
+        return (in != nullptr && in->current) ? &*in->current : nullptr;
+    };
+    if (const VideoFrame* base = current_of(scene.base_input)) {
+        LayerDraw& l = d.layers[d.count++];
+        l.frame = base;
+        l.dest = fit_rect(base->width, base->height, config_.width, config_.height);
+    }
+    for (const LayerConfig& cfg : scene.layers) {
+        const VideoFrame* f = current_of(cfg.input_id);
+        if (f == nullptr) continue;
+        LayerDraw& l = d.layers[d.count++];
+        l.frame = f;
+        l.crop = cfg.crop;
+        l.dest = cfg.dest;
+        l.opacity = cfg.opacity;
+    }
+    return d;
+}
+
+bool Session::render_bus(const BusScene& a, const BusScene* b, TransitionKind kind, float progress, std::int64_t target,
+                         std::uint64_t tick, ProgramFrame& out) noexcept {
+    out.info.tick_pts_ns = target;
+    out.info.tick_index = tick;
+    out.info.width = config_.width;
+    out.info.height = config_.height;
+
+    const SceneDraw da = build_draw(a);
+    if (da.count >= 1 && a.base_input != 0 && da.layers[0].frame != nullptr) {
+        const VideoFrame& base = *da.layers[0].frame;
+        out.info.input_id = a.base_input;
+        out.info.flags = base.flags;
+        out.info.source_pts_ns = base.pts_ns;
+        out.info.source_sequence = base.sequence;
+    }
+    bool has_layers = false;
+    for (const LayerConfig& l : a.layers) has_layers = has_layers || l.input_id != 0;
+
+    // Zero copy: a single full-size base input and nothing else to draw.
+    if (b == nullptr && !has_layers && out.info.input_id != 0) {
+        const Input* in = find_input(a.base_input);
+        if (in != nullptr && in->current && in->current->width == config_.width &&
+            in->current->height == config_.height) {
+            out.frame = in->current;
+            return true;
+        }
+    }
+    if (b == nullptr && da.count == 0) {
+        out.frame = black_frame_;
+        return true;
+    }
+    out.frame = program_pool_->acquire();
+    if (!out.frame) {
+        program_pool_exhausted_.fetch_add(1, std::memory_order_relaxed);
+        out.frame = black_frame_;
+        return false;
+    }
+    SceneDraw db;
+    if (b != nullptr) db = build_draw(*b);
+    const Status st = compositor_->render(da, b != nullptr ? &db : nullptr, kind, progress, *out.frame);
+    if (!st.is_ok()) {
+        out.frame = black_frame_;
+        return false;
+    }
+    composited_frames_.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
 void Session::output_loop() noexcept {
     os::set_current_thread_name("mixit-tick");
     const Rate rate = config_.frame_rate;
     const std::int64_t period = duration_of_index(0, rate);
     std::int64_t n = 0;
+    std::int64_t previous_n = -1;
 
     while (!stop_requested_.load(std::memory_order_acquire)) {
         const std::int64_t target = origin_ns_ + time_of_index(n, rate);
@@ -379,42 +543,50 @@ void Session::output_loop() noexcept {
         for (auto& in : inputs_) sync_input(*in, target);
         for (auto& in : inputs_) consume_audio(*in);
 
-        ProgramFrame out;
-        out.info.tick_pts_ns = target;
-        out.info.tick_index = static_cast<std::uint64_t>(n);
-        out.info.width = config_.width;
-        out.info.height = config_.height;
-        const std::uint32_t program_id = program_input_id_.load(std::memory_order_acquire);
-        Input* src = program_id == 0 ? nullptr : find_input(program_id);
-        if (src != nullptr && src->current) {
-            const VideoFrame& f = *src->current;
-            if (f.width == config_.width && f.height == config_.height) {
-                out.frame = src->current;  // zero copy
-            } else {
-                out.frame = program_pool_->acquire();
-                if (out.frame) {
-                    scale_nearest(f, *out.frame);
-                } else {
-                    program_pool_exhausted_.fetch_add(1, std::memory_order_relaxed);
+        // Snapshot scenes and advance a running transition.
+        BusScene program_scene;
+        BusScene preview_scene;
+        Transition tr;
+        {
+            std::lock_guard scenes(scene_mutex_);
+            program_scene = program_scene_;
+            preview_scene = preview_scene_;
+            if (transition_.active) {
+                // Transitions advance with output time: ticks skipped after a
+                // stall count too, so the duration holds under load.
+                const std::int64_t step = previous_n < 0 ? 1 : std::max<std::int64_t>(1, n - previous_n);
+                transition_.elapsed = static_cast<std::uint32_t>(
+                    std::min<std::int64_t>(transition_.total, static_cast<std::int64_t>(transition_.elapsed) + step));
+                tr = transition_;
+                if (transition_.elapsed >= transition_.total) {  // last frame shows B fully, then swap
+                    std::swap(program_scene_, preview_scene_);
+                    transition_.active = false;
+                    transitions_completed_.fetch_add(1, std::memory_order_relaxed);
                 }
             }
-            if (out.frame) {
-                out.info.input_id = program_id;
-                out.info.flags = f.flags;
-                out.info.source_pts_ns = f.pts_ns;
-                out.info.source_sequence = f.sequence;
-                const std::int64_t latency = target - f.pts_ns;
-                video_latency_last_ns_.store(latency, std::memory_order_relaxed);
-                atomic_max(video_latency_max_ns_, latency);
-            }
         }
-        if (!out.frame) {
-            out.frame = black_frame_;
-            program_black_frames_.fetch_add(1, std::memory_order_relaxed);
+
+        ProgramFrame out;
+        const float progress = tr.active ? static_cast<float>(tr.elapsed) / static_cast<float>(tr.total) : 0.0f;
+        render_bus(program_scene, tr.active ? &preview_scene : nullptr, tr.kind, progress, target,
+                   static_cast<std::uint64_t>(n), out);
+        if (out.info.input_id != 0) {
+            const std::int64_t latency = target - out.info.source_pts_ns;
+            video_latency_last_ns_.store(latency, std::memory_order_relaxed);
+            atomic_max(video_latency_max_ns_, latency);
         }
+        if (out.info.input_id == 0 && !tr.active) program_black_frames_.fetch_add(1, std::memory_order_relaxed);
         program_frames_.fetch_add(1, std::memory_order_relaxed);
         (void)program_out_.push(std::move(out));
 
+        // Preview is rendered only while someone is watching it.
+        if (now - preview_requested_ns_.load(std::memory_order_relaxed) < 1'000'000'000) {
+            ProgramFrame pv;
+            render_bus(preview_scene, nullptr, TransitionKind::Cut, 0.0f, target, static_cast<std::uint64_t>(n), pv);
+            (void)preview_out_.push(std::move(pv));
+        }
+
+        previous_n = n;
         ++n;
         // After a long stall (debugger, sleep), resynchronize instead of
         // replaying a burst of stale ticks.
@@ -437,7 +609,17 @@ SessionStats Session::stats() const {
         std::lock_guard lock(control_mutex_);
         s.input_count = static_cast<std::uint32_t>(inputs_.size());
     }
-    s.program_input_id = program_input_id_.load();
+    {
+        std::lock_guard scenes(scene_mutex_);
+        s.program_input_id = program_scene_.base_input;
+        s.preview_input_id = preview_scene_.base_input;
+        s.transition_active = transition_.active ? static_cast<std::int32_t>(transition_.kind) : -1;
+        s.transition_progress =
+            transition_.active ? static_cast<float>(transition_.elapsed) / static_cast<float>(transition_.total) : 0.0f;
+    }
+    s.compositor = compositor_ ? compositor_->name() : "";
+    s.transitions_completed = transitions_completed_.load();
+    s.composited_frames = composited_frames_.load();
     s.ticks = ticks_.load();
     s.late_ticks = late_ticks_.load();
     s.skipped_ticks = skipped_ticks_.load();
@@ -474,15 +656,24 @@ Status Session::input_stats(std::uint32_t input_id, InputStats& out) const {
     return Status::ok();
 }
 
-Status Session::copy_program_frame(std::uint8_t* dest, std::size_t dest_size, std::uint32_t dest_stride,
-                                   ProgramFrameInfo& info) {
+Status Session::copy_bus_frame(Bus bus, std::uint8_t* dest, std::size_t dest_size, std::uint32_t dest_stride,
+                               ProgramFrameInfo& info) {
+    if (bus != Bus::Program && bus != Bus::Preview) return {MIXIT_E_INVALID_ARGUMENT, "unknown bus"};
+    if (bus == Bus::Preview) {
+        preview_requested_ns_.store(static_cast<std::int64_t>(monotonic_ns()), std::memory_order_relaxed);
+    }
     std::lock_guard consumer(consumer_mutex_);
+    MediaQueue<ProgramFrame>& queue = bus == Bus::Program ? program_out_ : preview_out_;
+    ProgramFrame& cache = bus == Bus::Program ? program_cache_ : preview_cache_;
     ProgramFrame latest;
-    while (program_out_.pop(latest)) program_cache_ = std::move(latest);
-    if (!program_cache_.frame) return {MIXIT_E_NOT_FOUND, "no program frame has been produced yet"};
+    while (queue.pop(latest)) cache = std::move(latest);
+    if (!cache.frame) {
+        return {MIXIT_E_NOT_FOUND, bus == Bus::Program ? "no program frame has been produced yet"
+                                                       : "no preview frame yet (preview renders while it is being read)"};
+    }
 
-    const VideoFrame& f = *program_cache_.frame;
-    info = program_cache_.info;
+    const VideoFrame& f = *cache.frame;
+    info = cache.info;
     const std::size_t row_bytes = static_cast<std::size_t>(f.width) * 4;
     if (dest == nullptr) {  // size query: report the tightly packed size
         return {MIXIT_E_BUFFER_TOO_SMALL, "program frame needs " + std::to_string(row_bytes * f.height) + " bytes"};

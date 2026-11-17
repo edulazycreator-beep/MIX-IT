@@ -14,6 +14,7 @@ set(MIXIT_CORE_SOURCES
     src/core/last_error.cpp
     src/logging/json.cpp
     src/logging/logger.cpp
+    src/media/cpu_compositor.cpp
     src/media/ffmpeg_library.cpp
     src/media/file_source.cpp
     src/media/session.cpp

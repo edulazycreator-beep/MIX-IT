@@ -9,6 +9,7 @@
 #include <iterator>
 #include <mutex>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -235,7 +236,9 @@ TEST(EngineAbi, LogFileIsCreated) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         std::ifstream reader(path, std::ios::binary);
         ASSERT_TRUE(reader.is_open()) << "log file is locked while the engine runs";
-        live.assign(std::istreambuf_iterator<char>(reader), std::istreambuf_iterator<char>());
+        std::ostringstream content;
+        content << reader.rdbuf();
+        live = content.str();
     }
     EXPECT_NE(live.find("engine initialized"), std::string::npos) << live;
 

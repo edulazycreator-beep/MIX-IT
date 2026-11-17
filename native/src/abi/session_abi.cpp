@@ -12,7 +12,12 @@
 
 static_assert(sizeof(mixit_session_config) == 32);
 static_assert(sizeof(mixit_test_source_config) == 32);
-static_assert(sizeof(mixit_session_stats) == 96);
+static_assert(sizeof(mixit_session_stats) == 128);
+static_assert(offsetof(mixit_session_stats, preview_input_id) == 96);
+static_assert(sizeof(mixit_layer_config) == 48);
+
+// Size of mixit_session_stats as defined by API 0.2 (before appended fields).
+constexpr std::uint32_t kSessionStatsV02Size = 96;
 static_assert(offsetof(mixit_session_stats, ticks) == 16);
 static_assert(offsetof(mixit_session_stats, video_latency_max_ns) == 88);
 static_assert(sizeof(mixit_input_stats) == 128);
@@ -59,6 +64,33 @@ std::shared_ptr<media::Session> resolve(mixit_session handle) {
 }
 
 constexpr const char* kInvalidSession = "invalid session handle";
+
+mixit_result copy_frame(const char* fn, mixit_session session, media::Bus bus, uint8_t* buffer, uint32_t buffer_size,
+                        uint32_t stride, mixit_video_frame_info* out_info) noexcept {
+    if (!struct_size_ok(out_info)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_info NULL or struct_size too small");
+    if (buffer == nullptr && buffer_size != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "buffer is NULL");
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = resolve(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        media::ProgramFrameInfo info;
+        const Status r = s->copy_bus_frame(bus, buffer, buffer_size, stride, info);
+        if (r.is_ok() || r.code() == MIXIT_E_BUFFER_TOO_SMALL) {
+            mixit_video_frame_info o{};
+            o.struct_size = sizeof(o);
+            o.width = info.width;
+            o.height = info.height;
+            o.pixel_format = MIXIT_PIXEL_FORMAT_BGRA8;
+            o.input_id = info.input_id;
+            o.flags = info.flags;
+            o.tick_pts_ns = info.tick_pts_ns;
+            o.source_pts_ns = info.source_pts_ns;
+            o.source_sequence = info.source_sequence;
+            o.tick_index = info.tick_index;
+            write_out(out_info, o);
+        }
+        return report(fn, r);
+    });
+}
 
 }  // namespace
 
@@ -179,7 +211,9 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_stop(mixit_session session) {
 
 MIXIT_API mixit_result MIXIT_CALL mixit_session_get_stats(mixit_session session, mixit_session_stats* out_stats) {
     constexpr const char* fn = "mixit_session_get_stats";
-    if (!struct_size_ok(out_stats)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_stats NULL or struct_size too small");
+    if (!mixit::abi::struct_size_at_least(out_stats, kSessionStatsV02Size)) {
+        return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_stats NULL or struct_size too small");
+    }
     return guarded(fn, [&]() -> mixit_result {
         const auto s = resolve(session);
         if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
@@ -199,7 +233,13 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_get_stats(mixit_session session,
         o.program_pool_exhausted = st.program_pool_exhausted;
         o.video_latency_last_ns = st.video_latency_last_ns;
         o.video_latency_max_ns = st.video_latency_max_ns;
-        write_out(out_stats, o);
+        o.preview_input_id = st.preview_input_id;
+        o.transition_active = st.transition_active;
+        o.transition_progress = st.transition_progress;
+        o.compositor = st.compositor == "d3d11" ? MIXIT_COMPOSITOR_D3D11 : MIXIT_COMPOSITOR_CPU;
+        o.transitions_completed = st.transitions_completed;
+        o.composited_frames = st.composited_frames;
+        mixit::abi::write_out_prefix(out_stats, o);
         return MIXIT_OK;
     });
 }
@@ -242,33 +282,68 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_get_input_stats(mixit_session se
     });
 }
 
-MIXIT_API mixit_result MIXIT_CALL mixit_session_copy_program_frame(mixit_session session, uint8_t* buffer,
-                                                                    uint32_t buffer_size, uint32_t stride,
-                                                                    mixit_video_frame_info* out_info) {
-    constexpr const char* fn = "mixit_session_copy_program_frame";
-    if (!struct_size_ok(out_info)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_info NULL or struct_size too small");
-    if (buffer == nullptr && buffer_size != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "buffer is NULL");
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_preview_input(mixit_session session, uint32_t input_id) {
+    constexpr const char* fn = "mixit_session_set_preview_input";
     return guarded(fn, [&]() -> mixit_result {
         const auto s = resolve(session);
         if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
-        media::ProgramFrameInfo info;
-        const Status r = s->copy_program_frame(buffer, buffer_size, stride, info);
-        if (r.is_ok() || r.code() == MIXIT_E_BUFFER_TOO_SMALL) {
-            mixit_video_frame_info o{};
-            o.struct_size = sizeof(o);
-            o.width = info.width;
-            o.height = info.height;
-            o.pixel_format = MIXIT_PIXEL_FORMAT_BGRA8;
-            o.input_id = info.input_id;
-            o.flags = info.flags;
-            o.tick_pts_ns = info.tick_pts_ns;
-            o.source_pts_ns = info.source_pts_ns;
-            o.source_sequence = info.source_sequence;
-            o.tick_index = info.tick_index;
-            write_out(out_info, o);
-        }
-        return report(fn, r);
+        return report(fn, s->set_preview_input(input_id));
     });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_cut(mixit_session session) {
+    constexpr const char* fn = "mixit_session_cut";
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = resolve(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        return report(fn, s->cut());
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_start_transition(mixit_session session, int32_t kind,
+                                                                  uint32_t duration_frames) {
+    constexpr const char* fn = "mixit_session_start_transition";
+    if (kind < MIXIT_TRANSITION_CUT || kind > MIXIT_TRANSITION_WIPE) {
+        return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown transition kind");
+    }
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = resolve(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        return report(fn, s->start_transition(static_cast<media::TransitionKind>(kind), duration_frames));
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_layer(mixit_session session, int32_t bus, uint32_t index,
+                                                           const mixit_layer_config* layer) {
+    constexpr const char* fn = "mixit_session_set_layer";
+    if (!struct_size_ok(layer)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "layer NULL or struct_size too small");
+    if (layer->reserved != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "reserved must be 0");
+    if (bus != MIXIT_BUS_PROGRAM && bus != MIXIT_BUS_PREVIEW) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown bus");
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = resolve(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        media::LayerConfig cfg;
+        cfg.input_id = layer->input_id;
+        cfg.crop = {layer->crop_x, layer->crop_y, layer->crop_w, layer->crop_h};
+        cfg.dest = {layer->dest_x, layer->dest_y, layer->dest_w, layer->dest_h};
+        cfg.opacity = layer->opacity;
+        return report(fn, s->set_layer(static_cast<media::Bus>(bus), index, cfg));
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_copy_bus_frame(mixit_session session, int32_t bus, uint8_t* buffer,
+                                                                uint32_t buffer_size, uint32_t stride,
+                                                                mixit_video_frame_info* out_info) {
+    constexpr const char* fn = "mixit_session_copy_bus_frame";
+    if (bus != MIXIT_BUS_PROGRAM && bus != MIXIT_BUS_PREVIEW) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown bus");
+    return copy_frame(fn, session, static_cast<media::Bus>(bus), buffer, buffer_size, stride, out_info);
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_copy_program_frame(mixit_session session, uint8_t* buffer,
+                                                                    uint32_t buffer_size, uint32_t stride,
+                                                                    mixit_video_frame_info* out_info) {
+    return copy_frame("mixit_session_copy_program_frame", session, media::Bus::Program, buffer, buffer_size, stride,
+                      out_info);
 }
 
 }  // extern "C"
