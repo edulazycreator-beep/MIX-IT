@@ -30,7 +30,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/fetch-ffmpeg-windows.ps1 -Tag autobuild-2026-11-16-15-29 -Destination build/ffmpeg
+        # Pinned: tag + SHA-256 of ffmpeg-n9.0.2-57-gd838f9f9ae-win64-lgpl-shared-9.0.zip
+        run: ./scripts/fetch-ffmpeg-windows.ps1 -Tag autobuild-2026-11-16-15-29 -Sha256 bc661777e3aeb29cbd9e68f8b29a4ea1b54cc0db0373ff447085e5cb4ef307b3 -Destination build/ffmpeg
       - name: Build and test
         shell: pwsh
         run: ./scripts/build-windows.ps1 -Configuration Debug

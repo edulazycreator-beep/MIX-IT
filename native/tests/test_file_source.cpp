@@ -91,6 +91,30 @@ struct Fixture {
     }
 };
 
+// Deletes the file at scope exit. Declare it BEFORE the Fixture so the
+// session (which keeps the file open — Windows refuses to delete open files)
+// is destroyed first.
+struct TempFile {
+    std::string path;
+    ~TempFile() {
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+    }
+};
+
+// Polls until the input's produced-frame count stops changing (the file has
+// been fully delivered) or `timeout` passes.
+uint64_t wait_for_frames(const Fixture& fx, uint32_t id, uint64_t expected, std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    uint64_t produced = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        produced = fx.input(id).frames_produced;
+        if (produced >= expected) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return produced;
+}
+
 #define REQUIRE_FFMPEG()                                                    \
     do {                                                                    \
         if (!ffmpeg_usable()) GTEST_SKIP() << "FFmpeg not usable in this build"; \
@@ -143,7 +167,8 @@ TEST(FileSource, PlaysFramesInOrderWithAudioVideoSync) {
     mixit::testing::TestMediaSpec spec;
     spec.frames = 60;  // 2 s
     spec.flash_interval_frames = 15;
-    const std::string path = make_file("play.nut", spec);
+    const TempFile path_tmp{make_file("play.nut", spec)};
+    const std::string& path = path_tmp.path;
 
     Fixture fx(320, 180, 30, 1);
     uint32_t id = 0;
@@ -169,7 +194,6 @@ TEST(FileSource, PlaysFramesInOrderWithAudioVideoSync) {
     EXPECT_EQ(in.audio_blocks_dropped, 0u);
     EXPECT_GE(in.av_sync_events, 3u);
     EXPECT_LE(in.av_offset_max_abs_ns, 10'417) << "file A/V sync worse than half a sample";
-    std::filesystem::remove(path);
 }
 
 // Long-run lock across loops: the loop offset is derived from the audio
@@ -179,7 +203,8 @@ TEST(FileSource, LoopsKeepAudioAndVideoLocked) {
     mixit::testing::TestMediaSpec spec;
     spec.frames = 15;  // 0.5 s per pass
     spec.flash_interval_frames = 5;
-    const std::string path = make_file("loop.nut", spec);
+    const TempFile path_tmp{make_file("loop.nut", spec)};
+    const std::string& path = path_tmp.path;
 
     Fixture fx(320, 180, 30, 1);
     uint32_t id = 0;
@@ -198,14 +223,14 @@ TEST(FileSource, LoopsKeepAudioAndVideoLocked) {
     EXPECT_EQ(in.frames_dropped, 0u);
     ASSERT_TRUE(code.has_value());
     EXPECT_LT(code->sequence_low32, 15u) << "frame codes repeat each loop";
-    std::filesystem::remove(path);
 }
 
 TEST(FileSource, ResamplesAudioToTheSessionRate) {
     REQUIRE_FFMPEG();
     mixit::testing::TestMediaSpec spec;  // 48 kHz file
     spec.frames = 60;
-    const std::string path = make_file("resample.nut", spec);
+    const TempFile path_tmp{make_file("resample.nut", spec)};
+    const std::string& path = path_tmp.path;
 
     Fixture fx(320, 180, 30, 1, 44100);  // 44.1 kHz session
     uint32_t id = 0;
@@ -218,7 +243,6 @@ TEST(FileSource, ResamplesAudioToTheSessionRate) {
     EXPECT_GE(in.audio_blocks_produced, 199u);
     EXPECT_LE(in.audio_blocks_produced, 201u);
     EXPECT_EQ(in.audio_blocks_dropped, 0u);
-    std::filesystem::remove(path);
 }
 
 TEST(FileSource, DecodesCompressedMp4WithColourConversion) {
@@ -229,7 +253,8 @@ TEST(FileSource, DecodesCompressedMp4WithColourConversion) {
     spec.width = 640;
     spec.height = 360;
     spec.frames = 45;
-    const std::string path = make_file("compressed.mp4", spec);
+    const TempFile path_tmp{make_file("compressed.mp4", spec)};
+    const std::string& path = path_tmp.path;
 
     Fixture fx(640, 360, 30, 1);
     uint32_t id = 0;
@@ -241,23 +266,26 @@ TEST(FileSource, DecodesCompressedMp4WithColourConversion) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         if (fx.program_code().has_value()) ++decoded;
     }
+    const uint64_t produced = wait_for_frames(fx, id, 45, std::chrono::milliseconds(3000));
     ASSERT_EQ(mixit_session_stop(fx.session), MIXIT_OK);
     const mixit_input_stats in = fx.input(id);
-    EXPECT_EQ(in.frames_produced, 45u);
+    EXPECT_EQ(produced, 45u) << "decode_errors=" << in.decode_errors << " pool_exhausted=" << in.frames_pool_exhausted
+                             << " late=" << in.producer_late_skips;
     EXPECT_EQ(in.decode_errors, 0u);
     EXPECT_GE(decoded, 10) << "frame codes must survive YUV conversion and lossy coding";
     EXPECT_GT(in.audio_blocks_produced, 140u);
-    std::filesystem::remove(path);
 }
 
 TEST(FileSource, AudioOnlyAndVideoOnlyFiles) {
     REQUIRE_FFMPEG();
     mixit::testing::TestMediaSpec audio_only;
     audio_only.video = false;
-    const std::string a = make_file("audio_only.nut", audio_only);
+    const TempFile a_tmp{make_file("audio_only.nut", audio_only)};
+    const std::string& a = a_tmp.path;
     mixit::testing::TestMediaSpec video_only;
     video_only.audio = false;
-    const std::string v = make_file("video_only.nut", video_only);
+    const TempFile v_tmp{make_file("video_only.nut", video_only)};
+    const std::string& v = v_tmp.path;
 
     Fixture fx(320, 180, 30, 1);
     uint32_t ida = 0, idv = 0;
@@ -274,15 +302,14 @@ TEST(FileSource, AudioOnlyAndVideoOnlyFiles) {
     EXPECT_GE(fx.input(ida).audio_blocks_produced, 99u);
     EXPECT_EQ(fx.input(idv).frames_produced, 30u);
     EXPECT_EQ(fx.input(idv).audio_blocks_produced, 0u);
-    std::filesystem::remove(a);
-    std::filesystem::remove(v);
 }
 
 TEST(FileSource, RestartAfterStopPlaysFromTheBeginning) {
     REQUIRE_FFMPEG();
     mixit::testing::TestMediaSpec spec;
     spec.frames = 90;  // 3 s; we stop early
-    const std::string path = make_file("restart.nut", spec);
+    const TempFile path_tmp{make_file("restart.nut", spec)};
+    const std::string& path = path_tmp.path;
     Fixture fx(320, 180, 30, 1);
     uint32_t id = 0;
     ASSERT_EQ(fx.add_file(path, false, id), MIXIT_OK);
@@ -295,7 +322,6 @@ TEST(FileSource, RestartAfterStopPlaysFromTheBeginning) {
         EXPECT_LT(code->sequence_low32, 20u) << "run " << run << " must restart at the beginning";
         ASSERT_EQ(mixit_session_stop(fx.session), MIXIT_OK);
     }
-    std::filesystem::remove(path);
 }
 
 #endif  // MIXIT_HAVE_FFMPEG
