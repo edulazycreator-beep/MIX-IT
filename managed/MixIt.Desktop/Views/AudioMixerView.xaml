@@ -40,15 +40,30 @@
     <DockPanel>
         <!-- Header -->
         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
-            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
-                <TextBlock Text="Monitor / headphones" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,0,8,0" />
-                <ComboBox ItemsSource="{Binding MonitorSources}" SelectedItem="{Binding MonitorSource}" Width="100"
-                          ToolTip="Bus heard on the monitor when no strip is soloed" />
+            <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <TextBlock Text="Monitor source" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox ItemsSource="{Binding MonitorSources}" SelectedItem="{Binding MonitorSource}" Width="90"
+                              ToolTip="Bus heard on the monitor when no strip is soloed" Margin="0,0,12,0" />
+                    <TextBlock Text="Headphones" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox ItemsSource="{Binding OutputChoices}" SelectedItem="{Binding SelectedOutput}" Width="200"
+                              ToolTip="Device that plays the monitor bus (experimental)" />
+                    <Button Content="↻" Command="{Binding RefreshDevicesCommand}" Style="{StaticResource StudioButton}"
+                            Margin="4,0,0,0" ToolTip="Find audio devices" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
+                    <TextBlock Text="Audio input" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox ItemsSource="{Binding InputDevices}" SelectedItem="{Binding SelectedInputDevice}" DisplayMemberPath="Name"
+                              Width="200" ToolTip="Microphones and line inputs (experimental)" />
+                    <Button Content="+ Add" Command="{Binding AddAudioInputCommand}" Style="{StaticResource StudioButton}"
+                            Margin="4,0,0,0" ToolTip="Add as a live input (stop production first)" />
+                </StackPanel>
+                <TextBlock Text="{Binding OutputStatus}" Style="{StaticResource Label}" HorizontalAlignment="Right" Margin="0,4,0,0" />
             </StackPanel>
             <StackPanel>
                 <TextBlock Text="Audio Mixer" Style="{StaticResource SectionTitle}" Margin="0" />
                 <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"
-                           Text="Inputs are heard while they are on program (AFV) unless AFV is switched off. Solo affects the monitor only. Audio devices (output/capture) are not connected yet." />
+                           Text="Inputs are heard while they are on program (AFV) unless AFV is switched off. Solo affects the monitor only. Audio devices are experimental." />
             </StackPanel>
         </DockPanel>
 

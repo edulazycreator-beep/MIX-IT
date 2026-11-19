@@ -2,9 +2,13 @@
 // parameter types and back; validation of ranges lives in the session.
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
+#include <string>
+#include <vector>
 
 #include "abi/abi_common.hpp"
 #include "abi/session_handles.hpp"
+#include "core/last_error.hpp"
 #include "mixit/mixit_engine.h"
 
 static_assert(sizeof(mixit_eq_band) == 20);
@@ -17,6 +21,11 @@ static_assert(sizeof(mixit_audio_meter) == 104);
 static_assert(offsetof(mixit_audio_meter, peak_db) == 16);
 static_assert(offsetof(mixit_audio_meter, gain_reduction_db) == 80);
 static_assert(sizeof(mixit_audio_block_info) == 24);
+static_assert(sizeof(mixit_audio_device_info) == 408);
+static_assert(sizeof(mixit_audio_output_config) == 24);
+static_assert(sizeof(mixit_audio_output_stats) == 176);
+static_assert(offsetof(mixit_audio_output_stats, drift_ratio) == 40);
+static_assert(sizeof(mixit_audio_capture_config) == 16);
 static_assert(MIXIT_AUDIO_EQ_BANDS == mixit::audio::kEqBands);
 static_assert(MIXIT_AUDIO_MIX_BUSES == mixit::audio::kMixBuses);
 static_assert(MIXIT_AUDIO_MAX_METER_CHANNELS == mixit::audio::kMaxMeterChannels);
@@ -265,5 +274,105 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_read_bus_audio(mixit_session ses
         o.first_sample = info.first_sample;
         write_out(out_info, o);
         return st.is_ok() ? MIXIT_OK : report(fn, st);
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_enumerate_audio_devices(mixit_engine engine, int32_t direction,
+                                                                 mixit_audio_device_info* devices, uint32_t capacity,
+                                                                 uint32_t* out_count) {
+    constexpr const char* fn = "mixit_enumerate_audio_devices";
+    if (out_count == nullptr) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_count is NULL");
+    *out_count = 0;
+    if (direction != MIXIT_AUDIO_DEVICE_RENDER && direction != MIXIT_AUDIO_DEVICE_CAPTURE) {
+        return fail(fn, MIXIT_E_INVALID_ARGUMENT, "direction must be RENDER or CAPTURE");
+    }
+    if (capacity > 0 && devices == nullptr) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "devices is NULL");
+    for (uint32_t i = 0; i < capacity; ++i) {
+        if (devices[i].struct_size < sizeof(mixit_audio_device_info)) {
+            return fail(fn, MIXIT_E_INVALID_ARGUMENT, "devices[i].struct_size too small");
+        }
+    }
+    return guarded(fn, [&]() -> mixit_result {
+        const auto e = mixit::abi::resolve_engine(engine);
+        if (!e) return fail(fn, MIXIT_E_INVALID_HANDLE, "invalid engine handle");
+        std::vector<audio::AudioDeviceInfo> found;
+        const auto dir = direction == MIXIT_AUDIO_DEVICE_RENDER ? audio::DeviceDirection::Render
+                                                                : audio::DeviceDirection::Capture;
+        if (Status st = audio::enumerate_audio_devices(dir, e->logger(), found); !st.is_ok()) return report(fn, st);
+        uint32_t written = 0;
+        for (const audio::AudioDeviceInfo& d : found) {
+            if (d.id.size() >= sizeof(mixit_audio_device_info::id)) continue;  // never hand out a truncated id
+            if (written < capacity) {
+                mixit_audio_device_info info{};
+                info.struct_size = sizeof(info);
+                info.direction = direction;
+                info.flags = d.is_default ? MIXIT_AUDIO_DEVICE_FLAG_DEFAULT : 0u;
+                info.channels = d.channels;
+                info.sample_rate = d.sample_rate;
+                mixit::copy_utf8_truncated(info.name, sizeof(info.name), d.name);
+                std::memcpy(info.id, d.id.c_str(), d.id.size() + 1);
+                devices[written] = info;
+            }
+            ++written;
+        }
+        *out_count = written;
+        return MIXIT_OK;
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_audio_output(mixit_session session,
+                                                                  const mixit_audio_output_config* config) {
+    constexpr const char* fn = "mixit_session_set_audio_output";
+    if (config != nullptr && !struct_size_ok(config)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "struct_size too small");
+    if (config != nullptr && config->reserved != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "reserved must be 0");
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = mixit::abi::resolve_session(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        if (config == nullptr) {
+            s->disable_audio_output();
+            return MIXIT_OK;
+        }
+        const std::string id = config->device_id == nullptr ? std::string() : std::string(config->device_id);
+        return report(fn, s->set_audio_output(config->bus, id, config->latency_ms));
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_audio_output_stats(mixit_session session,
+                                                                        mixit_audio_output_stats* out_stats) {
+    constexpr const char* fn = "mixit_session_get_audio_output_stats";
+    if (!struct_size_ok(out_stats)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_stats NULL or struct_size too small");
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = mixit::abi::resolve_session(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        const auto info = s->audio_output_info();
+        mixit_audio_output_stats o{};
+        o.struct_size = sizeof(o);
+        o.state = info.enabled ? static_cast<int32_t>(info.device.state) : MIXIT_AUDIO_OUTPUT_OFF;
+        o.bus = info.bus;
+        o.buffered_ms = static_cast<uint32_t>(static_cast<std::uint64_t>(info.device.buffered_frames) * 1000 /
+                                              s->config().sample_rate);
+        o.underruns = info.device.underruns;
+        o.device_errors = info.device.device_errors;
+        o.dropped_frames = info.dropped_frames;
+        o.drift_ratio = info.device.ratio;
+        mixit::copy_utf8_truncated(o.device_name, sizeof(o.device_name), info.device.device_name);
+        write_out(out_stats, o);
+        return MIXIT_OK;
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_audio_capture_source(mixit_session session,
+                                                                          const mixit_audio_capture_config* config,
+                                                                          uint32_t* out_input_id) {
+    constexpr const char* fn = "mixit_session_add_audio_capture_source";
+    if (out_input_id == nullptr) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_input_id is NULL");
+    *out_input_id = 0;
+    if (!struct_size_ok(config)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "config NULL or struct_size too small");
+    if (config->flags != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown flags");
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = mixit::abi::resolve_session(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        const std::string id = config->device_id == nullptr ? std::string() : std::string(config->device_id);
+        return report(fn, s->add_audio_capture_source(id, *out_input_id));
     });
 }

@@ -196,6 +196,51 @@ internal unsafe struct MixitAudioMeter
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitAudioDeviceInfo
+{
+    public uint StructSize;
+    public int Direction;
+    public uint Flags;
+    public uint Channels;
+    public uint SampleRate;
+    public uint Reserved;
+    public fixed byte Name[128];
+    public fixed byte Id[256];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitAudioOutputConfig
+{
+    public uint StructSize;
+    public uint Bus;
+    public byte* DeviceId;
+    public uint LatencyMs;
+    public uint Reserved;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitAudioOutputStats
+{
+    public uint StructSize;
+    public int State;
+    public uint Bus;
+    public uint BufferedMs;
+    public ulong Underruns;
+    public ulong DeviceErrors;
+    public ulong DroppedFrames;
+    public double DriftRatio;
+    public fixed byte DeviceName[128];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitAudioCaptureConfig
+{
+    public uint StructSize;
+    public uint Flags;
+    public byte* DeviceId;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct MixitAudioBlockInfo
 {
     public uint StructSize;
@@ -325,6 +370,10 @@ internal static class NativeStructSizes
     public const int AudioBusConfig = 24;
     public const int AudioMeter = 104;
     public const int AudioBlockInfo = 24;
+    public const int AudioDeviceInfo = 408;
+    public const int AudioOutputConfig = 24;
+    public const int AudioOutputStats = 176;
+    public const int AudioCaptureConfig = 16;
     public const int LayerConfig = 48;
     public const int CaptureDeviceInfo = 648;
     public const int CaptureSourceConfig = 32;

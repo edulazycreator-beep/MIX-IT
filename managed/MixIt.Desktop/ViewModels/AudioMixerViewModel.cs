@@ -26,6 +26,9 @@ public sealed class AudioMixerViewModel : ObservableObject
     private AudioBus _monitorSource = AudioBus.Master;
     private string? _error;
     private bool _active;
+    private DeviceChoice _selectedOutput = DeviceChoice.Off;
+    private AudioDevice? _selectedInputDevice;
+    private string _outputStatus = "";
 
     public AudioMixerViewModel(ProductionService production, ILogger<AudioMixerViewModel> logger)
     {
@@ -39,7 +42,59 @@ public sealed class AudioMixerViewModel : ObservableObject
             Buses.Add(new BusViewModel(bus, this));
         }
         MonitorBus = new BusViewModel(AudioBus.Monitor, this);
+        OutputChoices.Add(DeviceChoice.Off);
+        RefreshDevicesCommand = new RelayCommand(_ => Guard(RefreshDevices), _ => _production.EngineAvailable);
+        AddAudioInputCommand = new RelayCommand(_ => Guard(() => _production.AddAudioCapture(_selectedInputDevice!)),
+            _ => _selectedInputDevice is not null && _production.CanEditInputs && _production.EngineAvailable);
         Sync();
+    }
+
+    /// <summary>Monitor/headphone output choices: Off, the default device, then each device.</summary>
+    public ObservableCollection<DeviceChoice> OutputChoices { get; } = [];
+    public ObservableCollection<AudioDevice> InputDevices { get; } = [];
+    public ICommand RefreshDevicesCommand { get; }
+    public ICommand AddAudioInputCommand { get; }
+
+    public DeviceChoice SelectedOutput
+    {
+        get => _selectedOutput;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedOutput, value)) return;
+            Guard(() => _production.SetAudioOutput(value.DeviceId));
+        }
+    }
+
+    public AudioDevice? SelectedInputDevice
+    {
+        get => _selectedInputDevice;
+        set => SetProperty(ref _selectedInputDevice, value);
+    }
+
+    /// <summary>Monitor output state for the operator (device, buffer, problems).</summary>
+    public string OutputStatus
+    {
+        get => _outputStatus;
+        private set => SetProperty(ref _outputStatus, value);
+    }
+
+    /// <summary>Lists audio devices (call when the engine is up or on demand).</summary>
+    public void RefreshDevices()
+    {
+        string? current = _production.AudioOutputDeviceId;
+        OutputChoices.Clear();
+        OutputChoices.Add(DeviceChoice.Off);
+        OutputChoices.Add(new DeviceChoice("Default output device", ""));
+        foreach (AudioDevice d in _production.GetAudioDevices(AudioDeviceDirection.Render))
+        {
+            OutputChoices.Add(new DeviceChoice(d.Name, d.Id));
+        }
+        _selectedOutput = OutputChoices.FirstOrDefault(c => c.DeviceId == current) ?? DeviceChoice.Off;
+        OnPropertyChanged(nameof(SelectedOutput));
+        InputDevices.Clear();
+        foreach (AudioDevice d in _production.GetAudioDevices(AudioDeviceDirection.Capture)) InputDevices.Add(d);
+        SelectedInputDevice = InputDevices.FirstOrDefault(d => d.IsDefault) ?? InputDevices.FirstOrDefault();
+        if (OutputChoices.Count == 2 && InputDevices.Count == 0) OutputStatus = "No audio devices found.";
     }
 
     public ObservableCollection<StripViewModel> Strips { get; } = [];
@@ -84,6 +139,7 @@ public sealed class AudioMixerViewModel : ObservableObject
         set
         {
             if (!SetProperty(ref _active, value)) return;
+            if (value && OutputChoices.Count == 1) Guard(RefreshDevices);  // first visit: list devices
             UpdateTimer();
         }
     }
@@ -130,9 +186,20 @@ public sealed class AudioMixerViewModel : ObservableObject
         UpdateTimer();
     }
 
+    private void UpdateOutputStatus()
+    {
+        AudioOutputStatistics? o = _production.GetAudioOutputStatistics();
+        OutputStatus = o is null || o.State == AudioOutputState.Off
+            ? "Monitor output off"
+            : o.State == AudioOutputState.Retrying
+                ? $"Monitor output: device unavailable, retrying ({o.DeviceErrors} errors)"
+                : $"Monitor output: {o.DeviceName} · {o.BufferedMilliseconds} ms buffered · {o.Underruns} dropouts";
+    }
+
     private void UpdateTimer()
     {
         bool run = _active && _production.IsRunning;
+        if (_active && _production.EngineAvailable) UpdateOutputStatus();
         if (run && !_timer.IsEnabled) _timer.Start();
         if (!run && _timer.IsEnabled) _timer.Stop();
         if (!run)
@@ -145,11 +212,20 @@ public sealed class AudioMixerViewModel : ObservableObject
 
     private void UpdateMeters()
     {
+        UpdateOutputStatus();
         if (!_production.IsRunning) return;
         foreach (StripViewModel s in Strips) s.ShowMeters(_production.GetInputMeter(s.Id));
         foreach (BusViewModel b in Buses) b.ShowMeters(_production.GetBusMeter(b.Bus));
         MonitorBus.ShowMeters(_production.GetBusMeter(AudioBus.Monitor));
     }
+}
+
+/// <summary>An output device choice (null id = off, "" = default device).</summary>
+public sealed record DeviceChoice(string Name, string? DeviceId)
+{
+    public static DeviceChoice Off { get; } = new("Off", null);
+
+    public override string ToString() => Name;
 }
 
 /// <summary>Shared meter presentation: two peak bars (dBFS) and a readout.</summary>

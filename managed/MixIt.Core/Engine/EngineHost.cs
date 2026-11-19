@@ -121,6 +121,19 @@ public sealed class EngineHost : IDisposable
     /// <summary>Lifecycle step 3: creates a production session (engine must be running).</summary>
     public NativeSession CreateSession(SessionConfiguration configuration) => RequireEngine().CreateSession(configuration);
 
+    /// <summary>Active audio devices (EXPERIMENTAL). Empty where no audio backend exists.</summary>
+    public IReadOnlyList<AudioDevice> EnumerateAudioDevices(AudioDeviceDirection direction)
+    {
+        try
+        {
+            return RequireEngine().EnumerateAudioDevices(direction);
+        }
+        catch (MixItNativeException ex) when (ex.Result == NativeResult.NotSupported)
+        {
+            return [];
+        }
+    }
+
     /// <summary>Connected video capture devices (EXPERIMENTAL). Empty where capture is unsupported.</summary>
     public IReadOnlyList<CaptureDevice> EnumerateCaptureDevices()
     {

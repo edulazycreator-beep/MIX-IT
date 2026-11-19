@@ -11,6 +11,8 @@ public enum ProductionInputKind
     MediaFile,
     /// <summary>Webcam / capture card (EXPERIMENTAL).</summary>
     CaptureDevice,
+    /// <summary>Microphone / line input, audio only (EXPERIMENTAL).</summary>
+    AudioCapture,
 }
 
 /// <summary>An input of the current production, as the operator sees it.</summary>
@@ -61,6 +63,7 @@ public sealed class ProductionService : IDisposable
     private uint? _pipInputId;
     private readonly Dictionary<AudioBus, AudioBusSettings> _buses = [];
     private AudioBus _monitorSource = AudioBus.Master;
+    private (AudioBus Bus, string? DeviceId)? _audioOutput;
     private int _nextTestNumber = 1;
     private bool _starting;
 
@@ -96,7 +99,8 @@ public sealed class ProductionService : IDisposable
         if (format == _format && compositor == _compositor) return;
         _format = format;
         _compositor = compositor;
-        DisposeSession();  // rebuilt with the new format on next use
+        DisposeSession();
+        if (EngineAvailable) RequireSession();  // rebuild now: inputs, strips and the monitor output come back
         RaiseChanged();
     }
 
@@ -125,6 +129,20 @@ public sealed class ProductionService : IDisposable
         ArgumentNullException.ThrowIfNull(device);
         RequireStopped("add inputs");
         return AddSpec(new InputSpec(ProductionInputKind.CaptureDevice, device.Name, device.Id, false));
+    }
+
+    /// <summary>Audio devices of one direction (empty where unsupported).</summary>
+    public IReadOnlyList<AudioDevice> GetAudioDevices(AudioDeviceDirection direction) =>
+        EngineAvailable ? _host.EnumerateAudioDevices(direction) : [];
+
+    /// <summary>Adds a microphone / line input (EXPERIMENTAL). Audio follows video is off: it is live.</summary>
+    public ProductionInput AddAudioCapture(AudioDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        RequireStopped("add inputs");
+        ProductionInput input = AddSpec(new InputSpec(ProductionInputKind.AudioCapture, device.Name, device.Id, false));
+        SetAudioStrip(input.Id, GetAudioStrip(input.Id) with { AudioFollowsVideo = false });
+        return input;
     }
 
     public void RemoveInput(uint inputId)
@@ -270,6 +288,50 @@ public sealed class ProductionService : IDisposable
 
     public void ResetLoudness(AudioBus bus) => RequireSession().ResetLoudness(bus);
 
+    /// <summary>Selected monitor output device id (null = off; "" = default device).</summary>
+    public string? AudioOutputDeviceId => _audioOutput?.DeviceId;
+
+    /// <summary>Plays the monitor bus on a device (EXPERIMENTAL); null turns it off. Kept across rebuilds.</summary>
+    public void SetAudioOutput(string? deviceId)
+    {
+        NativeSession session = RequireSession();
+        if (deviceId is null)
+        {
+            session.DisableAudioOutput();
+            _audioOutput = null;
+            return;
+        }
+        session.SetAudioOutput(AudioBus.Monitor, deviceId);
+        _audioOutput = (AudioBus.Monitor, deviceId);
+    }
+
+    public AudioOutputStatistics? GetAudioOutputStatistics()
+    {
+        if (_session is null) return null;
+        try
+        {
+            return _session.GetAudioOutputStatistics();
+        }
+        catch (MixItNativeException ex) when (ex.Result == NativeResult.InvalidHandle)
+        {
+            return null;
+        }
+    }
+
+    private void TryApplyOutput(NativeSession session, AudioBus bus, string? deviceId)
+    {
+        try
+        {
+            session.SetAudioOutput(bus, deviceId);
+        }
+        catch (MixItNativeException ex)
+        {
+            // The production must come back even if the headphone device is gone.
+            _logger.LogWarning(ex, "Monitor output could not be restored on '{Device}'", deviceId);
+            _audioOutput = null;
+        }
+    }
+
     /// <summary>
     /// Copies the newest frame of a bus (BGRA8) into caller memory, e.g. a
     /// WriteableBitmap back buffer. Null when no frame is available.
@@ -319,6 +381,7 @@ public sealed class ProductionService : IDisposable
             ToneHz = 1000, FlashIntervalFrames = 0,  // colour bars with a -20 dBFS line-up tone
         }),
         ProductionInputKind.CaptureDevice => session.AddCaptureSource(spec.Path!),
+        ProductionInputKind.AudioCapture => session.AddAudioCaptureSource(spec.Path),
         _ => session.AddFileSource(spec.Path!, spec.Loop),
     };
 
@@ -326,6 +389,7 @@ public sealed class ProductionService : IDisposable
     {
         ProductionInputKind.TestSignal => $"{_format.Width}x{_format.Height} @ {_format.FrameRate.Value:0.##}",
         ProductionInputKind.CaptureDevice => "Capture device (experimental)",
+        ProductionInputKind.AudioCapture => "Audio input (experimental)",
         _ => spec.Loop ? "Media file, looping" : "Media file",
     };
 
@@ -350,6 +414,7 @@ public sealed class ProductionService : IDisposable
             }
             foreach ((AudioBus bus, AudioBusSettings settings) in _buses) session.SetAudioBus(bus, settings);
             session.SetMonitorSource(_monitorSource);
+            if (_audioOutput is { } o) TryApplyOutput(session, o.Bus, o.DeviceId);
         }
         catch
         {

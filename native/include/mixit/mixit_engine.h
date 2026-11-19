@@ -726,6 +726,81 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_read_bus_audio(mixit_session ses
                                                                 uint32_t capacity_frames,
                                                                 mixit_audio_block_info* out_info);
 
+/* ---- Audio devices (API 0.4, EXPERIMENTAL on Windows) -----------------------
+ * WASAPI shared mode. Streams use the session's rate and channel count; Windows
+ * converts to the device format and the engine compensates the device clock
+ * against the master clock (adaptive resampling, max ±0.5 %).
+ * Test device (all platforms, not enumerated): id "mixit:null" or
+ * "mixit:null:<ppm>" — paced by the monotonic clock with a clock offset;
+ * capture from it is a -20 dBFS 440 Hz tone. */
+#define MIXIT_AUDIO_DEVICE_RENDER  0
+#define MIXIT_AUDIO_DEVICE_CAPTURE 1
+#define MIXIT_AUDIO_DEVICE_FLAG_DEFAULT 0x1u
+
+typedef struct mixit_audio_device_info {
+    uint32_t struct_size;
+    int32_t  direction;      /* MIXIT_AUDIO_DEVICE_* */
+    uint32_t flags;          /* MIXIT_AUDIO_DEVICE_FLAG_* */
+    uint32_t channels;       /* device mix format */
+    uint32_t sample_rate;
+    uint32_t reserved;
+    char     name[128];      /* UTF-8, truncated on a character boundary */
+    char     id[256];        /* UTF-8, never truncated (longer ids are skipped) */
+} mixit_audio_device_info;
+
+/* Lists active devices of one direction (caller sets each struct_size;
+ * capacity 0 queries the count). NOT_SUPPORTED where no backend exists. */
+MIXIT_API mixit_result MIXIT_CALL mixit_enumerate_audio_devices(mixit_engine engine, int32_t direction,
+                                                                 mixit_audio_device_info* devices, uint32_t capacity,
+                                                                 uint32_t* out_count);
+
+typedef struct mixit_audio_output_config {
+    uint32_t    struct_size;
+    uint32_t    bus;          /* bus to play, normally MIXIT_AUDIO_BUS_MONITOR */
+    const char* device_id;    /* NULL or "" = default render device */
+    uint32_t    latency_ms;   /* 0 = 40; 10..500 (buffer between mixer and device) */
+    uint32_t    reserved;     /* 0 */
+} mixit_audio_output_config;
+
+/* Plays a bus on a device (headphones / monitor speakers). Any time; replaces
+ * the previous output. NULL config turns the output off. A device that fails
+ * or disappears is retried every second (stats.state = RETRYING). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_audio_output(mixit_session session,
+                                                                  const mixit_audio_output_config* config);
+
+#define MIXIT_AUDIO_OUTPUT_OFF      0
+#define MIXIT_AUDIO_OUTPUT_RUNNING  1
+#define MIXIT_AUDIO_OUTPUT_RETRYING 2
+
+typedef struct mixit_audio_output_stats {
+    uint32_t struct_size;
+    int32_t  state;              /* MIXIT_AUDIO_OUTPUT_* */
+    uint32_t bus;
+    uint32_t buffered_ms;
+    uint64_t underruns;          /* device needed audio the mixer had not delivered */
+    uint64_t device_errors;
+    uint64_t dropped_frames;     /* mixer output the device buffer could not take */
+    double   drift_ratio;        /* playback ratio (1.0 = clocks agree) */
+    char     device_name[128];
+} mixit_audio_output_stats;
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_audio_output_stats(mixit_session session,
+                                                                        mixit_audio_output_stats* out_stats);
+
+typedef struct mixit_audio_capture_config {
+    uint32_t    struct_size;
+    uint32_t    flags;        /* reserved, 0 */
+    const char* device_id;    /* NULL or "" = default capture device */
+} mixit_audio_capture_config;
+
+/* Adds an audio-only input from a capture device (microphone, line in, the
+ * audio of a USB/HDMI device). Only while not RUNNING. Audio is placed on the
+ * session timeline on arrival (≈30 ms latency); device loss gives silence,
+ * counted in input decode_errors, and a retry every second. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_audio_capture_source(mixit_session session,
+                                                                          const mixit_audio_capture_config* config,
+                                                                          uint32_t* out_input_id);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

@@ -24,6 +24,9 @@ set(MIXIT_CORE_SOURCES
     src/media/session_audio.cpp
     src/audio/dsp.cpp
     src/audio/channel_strip.cpp
+    src/audio/drift_resampler.cpp
+    src/audio/audio_device.cpp
+    src/audio/audio_device_wasapi.cpp
     src/media/test_signal.cpp
     src/media/test_signal_source.cpp
     src/media/time_base.cpp

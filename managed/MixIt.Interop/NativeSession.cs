@@ -399,6 +399,57 @@ public sealed unsafe class NativeSession : IDisposable
         return new AudioBlockInfo((int)info.Frames, TimeSpan.FromTicks(info.PtsNs / 100), info.FirstSample);
     }
 
+    /// <summary>
+    /// Plays a bus on an audio device (EXPERIMENTAL); null device id = default
+    /// render device. Replaces any previous output.
+    /// </summary>
+    public void SetAudioOutput(AudioBus bus, string? deviceId, int latencyMs = 0)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(latencyMs);
+        byte* id = deviceId is null ? null : (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(deviceId);
+        try
+        {
+            var c = new MixitAudioOutputConfig
+            {
+                StructSize = (uint)sizeof(MixitAudioOutputConfig), Bus = (uint)bus, DeviceId = id, LatencyMs = (uint)latencyMs,
+            };
+            Check(NativeMethods.mixit_session_set_audio_output(_handle, &c), "mixit_session_set_audio_output");
+        }
+        finally
+        {
+            if (id != null) System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)id);
+        }
+    }
+
+    public void DisableAudioOutput() =>
+        Check(NativeMethods.mixit_session_set_audio_output(_handle, null), "mixit_session_set_audio_output");
+
+    public AudioOutputStatistics GetAudioOutputStatistics()
+    {
+        MixitAudioOutputStats s = default;
+        s.StructSize = (uint)sizeof(MixitAudioOutputStats);
+        Check(NativeMethods.mixit_session_get_audio_output_stats(_handle, &s), "mixit_session_get_audio_output_stats");
+        return new AudioOutputStatistics((AudioOutputState)s.State, (AudioBus)s.Bus, (int)s.BufferedMs, s.Underruns,
+            s.DeviceErrors, s.DroppedFrames, s.DriftRatio, Utf8.FromNullTerminated(s.DeviceName, 128));
+    }
+
+    /// <summary>Adds an audio-only input from a capture device (EXPERIMENTAL; null = default device).</summary>
+    public uint AddAudioCaptureSource(string? deviceId)
+    {
+        byte* id = deviceId is null ? null : (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(deviceId);
+        try
+        {
+            var c = new MixitAudioCaptureConfig { StructSize = (uint)sizeof(MixitAudioCaptureConfig), DeviceId = id };
+            uint input;
+            Check(NativeMethods.mixit_session_add_audio_capture_source(_handle, &c, &input), "mixit_session_add_audio_capture_source");
+            return input;
+        }
+        finally
+        {
+            if (id != null) System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)id);
+        }
+    }
+
     /// <summary>Starts production (idempotent).</summary>
     public void Start() => Check(NativeMethods.mixit_session_start(_handle), "mixit_session_start");
 

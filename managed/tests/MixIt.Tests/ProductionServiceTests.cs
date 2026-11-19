@@ -161,4 +161,36 @@ public class ProductionServiceTests
             Assert.Null(service.GetInputMeter(999));
         }
     }
+
+    [Fact]
+    public async Task MonitorOutputAndAudioInputUseTheTestDevice()
+    {
+        (EngineHost host, ProductionService service) = Create();
+        using (host)
+        using (service)
+        {
+            ProductionInput mic = service.AddAudioCapture(
+                new AudioDevice(AudioDevice.NullDeviceId, "Test mic", AudioDeviceDirection.Capture, false, 2, 48000));
+            Assert.Equal(ProductionInputKind.AudioCapture, mic.Kind);
+            Assert.False(service.GetAudioStrip(mic.Id).AudioFollowsVideo);
+            service.SetAudioOutput(AudioDevice.NullDeviceId + ":150");
+            await service.StartAsync();
+            await Task.Delay(1500);
+            AudioOutputStatistics? o = service.GetAudioOutputStatistics();
+            Assert.NotNull(o);
+            Assert.Equal(AudioOutputState.Running, o.State);
+            Assert.Equal(AudioBus.Monitor, o.Bus);
+            Assert.Equal(0UL, o.Underruns);
+            AudioMeterReading? m = service.GetInputMeter(mic.Id);
+            Assert.NotNull(m);
+            Assert.InRange(m.PeakDb[0], -22f, -18f);  // the test device's -20 dBFS tone
+            await service.StopAsync();
+
+            service.SetFormat(ProductionFormat.Standard.First(f => f.Width == 1280));  // output survives the rebuild
+            Assert.Equal(AudioDevice.NullDeviceId + ":150", service.AudioOutputDeviceId);
+            Assert.Equal(AudioOutputState.Running, service.GetAudioOutputStatistics()?.State);
+            service.SetAudioOutput(null);
+            Assert.Equal(AudioOutputState.Off, service.GetAudioOutputStatistics()?.State);
+        }
+    }
 }

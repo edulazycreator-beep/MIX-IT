@@ -188,6 +188,24 @@ internal static unsafe partial class NativeMethods
     public static partial NativeResult mixit_session_read_bus_audio(SessionHandle session, uint bus, float* dest,
         uint capacityFrames, MixitAudioBlockInfo* info);
 
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_enumerate_audio_devices(EngineHandle engine, int direction,
+        MixitAudioDeviceInfo* devices, uint capacity, uint* count);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_audio_output(SessionHandle session, MixitAudioOutputConfig* config);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_audio_output_stats(SessionHandle session, MixitAudioOutputStats* stats);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_add_audio_capture_source(SessionHandle session,
+        MixitAudioCaptureConfig* config, uint* inputId);
+
     // ---- capture devices (API 0.3, experimental)
 
     [LibraryImport(LibraryName)]

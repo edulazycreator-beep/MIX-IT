@@ -211,6 +211,34 @@ public sealed unsafe class NativeEngine : IDisposable
         return list;
     }
 
+    /// <summary>
+    /// Active audio devices of one direction (EXPERIMENTAL; WASAPI). Throws
+    /// with <see cref="NativeResult.NotSupported"/> where no backend exists.
+    /// </summary>
+    public IReadOnlyList<AudioDevice> EnumerateAudioDevices(AudioDeviceDirection direction)
+    {
+        uint count = 0;
+        Check(NativeMethods.mixit_enumerate_audio_devices(_handle, (int)direction, null, 0, &count), "mixit_enumerate_audio_devices");
+        if (count == 0) return [];
+        var raw = new MixitAudioDeviceInfo[count + 4];
+        for (int i = 0; i < raw.Length; i++) raw[i].StructSize = (uint)sizeof(MixitAudioDeviceInfo);
+        fixed (MixitAudioDeviceInfo* p = raw)
+        {
+            Check(NativeMethods.mixit_enumerate_audio_devices(_handle, (int)direction, p, (uint)raw.Length, &count),
+                "mixit_enumerate_audio_devices");
+        }
+        var list = new List<AudioDevice>();
+        for (int i = 0; i < Math.Min(count, (uint)raw.Length); i++)
+        {
+            MixitAudioDeviceInfo d = raw[i];
+            string id = Utf8.FromNullTerminated(d.Id, 256);
+            if (id.Length == 0) continue;
+            list.Add(new AudioDevice(id, Utf8.FromNullTerminated(d.Name, 128), direction, (d.Flags & 1) != 0,
+                (int)d.Channels, (int)d.SampleRate));
+        }
+        return list;
+    }
+
     /// <summary>FFmpeg availability, versions and licence verdict for this engine build.</summary>
     public static MediaLibraryInfo GetMediaLibraryInfo()
     {

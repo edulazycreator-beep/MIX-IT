@@ -192,3 +192,35 @@ internal static unsafe class AudioConvert
             m.MomentaryLufs, m.ShortTermLufs, m.IntegratedLufs);
     }
 }
+
+/// <summary>Audio device direction (mirrors MIXIT_AUDIO_DEVICE_*).</summary>
+public enum AudioDeviceDirection
+{
+    Render = 0,
+    Capture = 1,
+}
+
+/// <summary>An audio endpoint. Pass <see cref="Id"/> to outputs and capture inputs ("" = default device).</summary>
+public sealed record AudioDevice(string Id, string Name, AudioDeviceDirection Direction, bool IsDefault, int Channels, int SampleRate)
+{
+    /// <summary>Development/test device available on every platform (not enumerated).</summary>
+    public const string NullDeviceId = "mixit:null";
+}
+
+public enum AudioOutputState
+{
+    Off = 0,
+    Running = 1,
+    /// <summary>The device failed or disappeared; the engine retries every second.</summary>
+    Retrying = 2,
+}
+
+public sealed record AudioOutputStatistics(
+    AudioOutputState State,
+    AudioBus Bus,
+    int BufferedMilliseconds,
+    ulong Underruns,
+    ulong DeviceErrors,
+    ulong DroppedFrames,
+    double DriftRatio,
+    string DeviceName);

@@ -91,6 +91,7 @@ void Session::init_audio() {
     for (std::uint32_t i = 0; i < kAudioBusCount; ++i) {
         audio_buses_.push_back(std::make_unique<AudioBus>(i, config_, audio_block_frames_));
     }
+    output_ring_ = std::make_unique<audio::SampleRing>(config_.channels, config_.sample_rate);  // 1 s
     const std::size_t block_floats = static_cast<std::size_t>(audio_block_frames_) * config_.channels;
     mix_scratch_.assign(block_floats, 0.0f);
     bus_accumulators_.assign(audio::kMixBuses + 1, std::vector<float>(block_floats, 0.0f));
@@ -107,6 +108,53 @@ void Session::reset_audio_runtime() noexcept {
 }
 
 // --------------------------------------------------------------------------- control
+
+Status Session::set_audio_output(std::uint32_t bus, const std::string& device_id, std::uint32_t latency_ms) {
+    if (bus >= kAudioBusCount) return {MIXIT_E_INVALID_ARGUMENT, "bus must be 0..5"};
+    if (latency_ms == 0) latency_ms = 40;
+    if (latency_ms < 10 || latency_ms > 500) return {MIXIT_E_INVALID_ARGUMENT, "latency must be 10..500 ms"};
+    std::lock_guard lock(control_mutex_);
+    if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
+    // Stop the old device first: one ring consumer at a time.
+    output_bus_.store(-1, std::memory_order_release);
+    output_.reset();
+    output_ring_->clear();
+    audio::AudioOutputConfig cfg;
+    cfg.device_id = device_id;
+    cfg.sample_rate = config_.sample_rate;
+    cfg.channels = config_.channels;
+    cfg.latency_ms = latency_ms;
+    std::unique_ptr<audio::AudioOutput> out;
+    if (Status st = audio::open_audio_output(cfg, *output_ring_, logger_, out); !st.is_ok()) return st;
+    output_ = std::move(out);
+    output_dropped_frames_.store(0, std::memory_order_relaxed);
+    output_bus_.store(static_cast<std::int32_t>(bus), std::memory_order_release);
+    return Status::ok();
+}
+
+void Session::disable_audio_output() {
+    std::lock_guard lock(control_mutex_);
+    output_bus_.store(-1, std::memory_order_release);
+    output_.reset();
+    output_ring_->clear();
+}
+
+Session::AudioOutputInfo Session::audio_output_info() const {
+    std::lock_guard lock(control_mutex_);
+    AudioOutputInfo info;
+    const std::int32_t bus = output_bus_.load(std::memory_order_acquire);
+    info.enabled = output_ != nullptr && bus >= 0;
+    info.bus = bus >= 0 ? static_cast<std::uint32_t>(bus) : 0;
+    if (output_) info.device = output_->stats();
+    info.dropped_frames = output_dropped_frames_.load(std::memory_order_relaxed);
+    return info;
+}
+
+Status Session::add_audio_capture_source(const std::string& device_id, std::uint32_t& out_input_id) {
+    std::unique_ptr<MediaSource> source;
+    if (Status st = audio::open_audio_capture_source(device_id, logger_, source); !st.is_ok()) return st;
+    return add_source(std::move(source), out_input_id);
+}
 
 Status Session::set_audio_strip(std::uint32_t input_id, const audio::StripParams& params) {
     if (Status st = validate(params); !st.is_ok()) return st;
@@ -331,6 +379,15 @@ void Session::mix_block(std::int64_t k) noexcept {
     mon.processor.process(audio::BusParams{}, monitor.data(), frames);
     mon.meters.publish(mon.processor.meters());
     emit(mon, monitor.data());
+
+    const std::int32_t out_bus = output_bus_.load(std::memory_order_acquire);
+    if (out_bus >= 0) {
+        const float* src = static_cast<std::uint32_t>(out_bus) == audio::kMonitorBus
+                               ? monitor.data()
+                               : bus_accumulators_[static_cast<std::size_t>(out_bus)].data();
+        const std::uint32_t written = output_ring_->write(src, frames);
+        if (written < frames) output_dropped_frames_.fetch_add(frames - written, std::memory_order_relaxed);
+    }
 }
 
 void Session::audio_loop() noexcept {

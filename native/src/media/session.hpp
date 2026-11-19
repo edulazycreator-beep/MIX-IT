@@ -27,6 +27,7 @@
 #include <thread>
 #include <vector>
 
+#include "audio/audio_device.hpp"
 #include "audio/channel_strip.hpp"
 #include "core/status.hpp"
 #include "media/compositor.hpp"
@@ -195,6 +196,21 @@ public:
     Status input_meters(std::uint32_t input_id, audio::StripMeters& out);
     Status bus_meters(std::uint32_t bus, audio::BusMeters& out);  // 0..5
     Status reset_loudness(std::uint32_t bus);
+    // Plays a bus (normally the monitor bus) on an audio device; works while
+    // the session runs or not (silence when stopped). Replaces any previous
+    // output. `disable_audio_output` turns it off.
+    Status set_audio_output(std::uint32_t bus, const std::string& device_id, std::uint32_t latency_ms);
+    void disable_audio_output();
+    struct AudioOutputInfo {
+        bool enabled = false;
+        std::uint32_t bus = 0;
+        audio::AudioOutputStats device;
+        std::uint64_t dropped_frames = 0;  // mixer blocks the device could not take (buffer full)
+    };
+    AudioOutputInfo audio_output_info() const;
+    // Audio-only input from a capture device ("" = default; "mixit:null[:ppm]" = test device).
+    Status add_audio_capture_source(const std::string& device_id, std::uint32_t& out_input_id);
+
     // Pops whole mixed blocks of a bus (interleaved float, session channels)
     // into `dest` (capacity in sample frames). NOT_FOUND if none is waiting.
     // One consumer per bus (diagnostics, tests); outputs get their own taps (M5).
@@ -297,6 +313,12 @@ private:
     std::vector<float> mix_scratch_;                      // one block, session channels
     std::vector<std::vector<float>> bus_accumulators_;    // kMixBuses + solo accumulator
     std::thread audio_thread_;
+    // Device output: the mixer writes the selected bus into the ring; the
+    // device thread (AudioOutput) plays it through a DriftResampler.
+    std::unique_ptr<audio::SampleRing> output_ring_;
+    std::unique_ptr<audio::AudioOutput> output_;  // guarded by control_mutex_
+    std::atomic<std::int32_t> output_bus_{-1};
+    std::atomic<std::uint64_t> output_dropped_frames_{0};
     std::atomic<std::uint64_t> audio_blocks_{0}, audio_late_blocks_{0}, audio_skipped_blocks_{0};
     std::atomic<std::int64_t> audio_max_lateness_ns_{0};
 };

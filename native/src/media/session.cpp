@@ -348,6 +348,8 @@ void Session::close() noexcept {
     std::lock_guard lock(control_mutex_);
     if (state() == SessionState::Closed) return;
     stop_threads();
+    output_bus_.store(-1, std::memory_order_release);
+    output_.reset();
     black_frame_.reset();
     state_.store(SessionState::Closed, std::memory_order_release);
 }

@@ -29,7 +29,9 @@ add_executable(mixit_native_tests
     test_compositor.cpp
     test_buses.cpp
     test_audio_dsp.cpp
-    test_audio_mixer.cpp)
+    test_audio_mixer.cpp
+    test_audio_drift.cpp
+    test_audio_devices.cpp)
 target_include_directories(mixit_native_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_definitions(mixit_native_tests PRIVATE MIXIT_HAVE_FFMPEG=$<BOOL:${MIXIT_FFMPEG_FOUND}>)
 target_link_libraries(mixit_native_tests PRIVATE mixit_engine_core GTest::gtest_main)
