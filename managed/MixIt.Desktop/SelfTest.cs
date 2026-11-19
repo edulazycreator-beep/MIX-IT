@@ -64,6 +64,13 @@ internal static class SelfTest
                 if (production.GetAudioStrip(mixer.Strips[0].Id).FaderDb != -10f) failures.Add("fader move did not reach the engine");
             }
             if (mixer.Error is not null) failures.Add($"mixer error shown: {mixer.Error}");
+            // Plug-in scan of the default VST3 folders must complete (the folders may be empty).
+            await mixer.ScanPluginsAsyncForTest();
+            if (mixer.PluginStatus.StartsWith("Scan failed", StringComparison.Ordinal)) failures.Add(mixer.PluginStatus);
+            if (mixer.Strips.Count > 0 && mixer.Strips[0].Inserts.Count != NativeSession.AudioInsertSlots)
+            {
+                failures.Add("strip does not show the insert slots");
+            }
             mixer.IsActive = false;
 
             await vm.ToggleProductionAsync();

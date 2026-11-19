@@ -195,6 +195,45 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_scan_vst3(EngineHandle engine, byte* path, MixitVst3PluginInfo* plugins,
+        uint capacity, uint* count);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_audio_insert(SessionHandle session, uint inputId,
+        MixitAudioInsertConfig* config);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_remove_audio_insert(SessionHandle session, uint inputId, uint slot);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_audio_insert_bypass(SessionHandle session, uint inputId, uint slot,
+        int bypass);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_audio_insert(SessionHandle session, uint inputId, uint slot,
+        MixitAudioInsertInfo* info);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_audio_insert_parameter(SessionHandle session, uint inputId,
+        uint slot, uint index, MixitAudioInsertParameter* parameter);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_audio_insert_parameter(SessionHandle session, uint inputId,
+        uint slot, uint parameterId, double value);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_audio_insert_state(SessionHandle session, uint inputId, uint slot,
+        byte* buffer, uint capacity, uint* size);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial NativeResult mixit_session_set_audio_output(SessionHandle session, MixitAudioOutputConfig* config);
 
     [LibraryImport(LibraryName)]

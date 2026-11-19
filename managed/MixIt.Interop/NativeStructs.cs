@@ -209,6 +209,58 @@ internal unsafe struct MixitAudioDeviceInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitVst3PluginInfo
+{
+    public uint StructSize;
+    public uint Reserved;
+    public fixed byte ClassId[40];
+    public fixed byte Name[128];
+    public fixed byte Vendor[128];
+    public fixed byte Version[64];
+    public fixed byte Subcategories[128];
+    public fixed byte Path[512];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitAudioInsertConfig
+{
+    public uint StructSize;
+    public uint Slot;
+    public byte* Path;
+    public byte* ClassId;
+    public byte* State;
+    public uint StateSize;
+    public uint Reserved;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitAudioInsertInfo
+{
+    public uint StructSize;
+    public uint Flags;
+    public uint ParameterCount;
+    public uint LatencySamples;
+    public ulong ProcessErrors;
+    public fixed byte ClassId[40];
+    public fixed byte Name[128];
+    public fixed byte Vendor[128];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitAudioInsertParameter
+{
+    public uint StructSize;
+    public uint Id;
+    public uint Flags;
+    public int StepCount;
+    public double DefaultValue;
+    public double Value;
+    public fixed byte Title[128];
+    public fixed byte Units[32];
+    public fixed byte Display[64];
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal unsafe struct MixitAudioOutputConfig
 {
     public uint StructSize;
@@ -374,6 +426,10 @@ internal static class NativeStructSizes
     public const int AudioOutputConfig = 24;
     public const int AudioOutputStats = 176;
     public const int AudioCaptureConfig = 16;
+    public const int Vst3PluginInfo = 1008;
+    public const int AudioInsertConfig = 40;
+    public const int AudioInsertInfo = 320;
+    public const int AudioInsertParameter = 256;
     public const int LayerConfig = 48;
     public const int CaptureDeviceInfo = 648;
     public const int CaptureSourceConfig = 32;

@@ -358,3 +358,81 @@ TEST(AudioMixer, Validation) {
         << "nothing mixed while stopped";
     EXPECT_EQ(mixit_session_read_bus_audio(m.session, 6, buf.data(), kBlock, &info), MIXIT_E_INVALID_ARGUMENT);
 }
+
+#if defined(MIXIT_TEST_VST3_BUNDLE)
+TEST(AudioMixer, Vst3InsertWhileRunning) {
+    Mix m;
+    const uint32_t a = m.add(1000);
+    ASSERT_EQ(mixit_session_set_program_input(m.session, a), MIXIT_OK);
+
+    mixit_vst3_plugin_info found[4];
+    for (auto& f : found) f.struct_size = sizeof(f);
+    uint32_t count = 0;
+    ASSERT_EQ(mixit_scan_vst3(m.engine, MIXIT_TEST_VST3_BUNDLE, found, 4, &count), MIXIT_OK) << last_error();
+    ASSERT_EQ(count, 1u);
+    EXPECT_STREQ(found[0].name, "MIX IT Test Gain");
+
+    ASSERT_EQ(mixit_session_start(m.session), MIXIT_OK);
+    wait_ms(200);
+    m.drain(MIXIT_AUDIO_BUS_MASTER);
+    EXPECT_NEAR(db(tone_level(m.collect(MIXIT_AUDIO_BUS_MASTER, 9600), 1000)), -20.0, 0.3);
+
+    mixit_audio_insert_config ic{};
+    ic.struct_size = sizeof(ic);
+    ic.slot = 1;
+    ic.path = found[0].path;
+    ic.class_id = found[0].class_id;
+    ASSERT_EQ(mixit_session_set_audio_insert(m.session, a, &ic), MIXIT_OK) << last_error();
+    mixit_audio_insert_info info{};
+    info.struct_size = sizeof(info);
+    ASSERT_EQ(mixit_session_get_audio_insert(m.session, a, 1, &info), MIXIT_OK);
+    EXPECT_STREQ(info.name, "MIX IT Test Gain");
+    EXPECT_EQ(info.parameter_count, 2u);
+    EXPECT_EQ(mixit_session_get_audio_insert(m.session, a, 0, &info), MIXIT_E_NOT_FOUND) << "slot 0 empty";
+
+    mixit_audio_insert_parameter p{};
+    p.struct_size = sizeof(p);
+    ASSERT_EQ(mixit_session_get_audio_insert_parameter(m.session, a, 1, 0, &p), MIXIT_OK);
+    EXPECT_STREQ(p.title, "Gain");
+    EXPECT_STREQ(p.display, "1.00");
+    ASSERT_EQ(mixit_session_set_audio_insert_parameter(m.session, a, 1, p.id, 1.0), MIXIT_OK);  // ×2 = +6 dB
+    wait_ms(100);
+    m.drain(MIXIT_AUDIO_BUS_MASTER);
+    EXPECT_NEAR(db(tone_level(m.collect(MIXIT_AUDIO_BUS_MASTER, 9600), 1000)), -20.0 + 6.02, 0.3);
+
+    ASSERT_EQ(mixit_session_set_audio_insert_bypass(m.session, a, 1, 1), MIXIT_OK);
+    wait_ms(100);
+    m.drain(MIXIT_AUDIO_BUS_MASTER);
+    EXPECT_NEAR(db(tone_level(m.collect(MIXIT_AUDIO_BUS_MASTER, 9600), 1000)), -20.0, 0.3);
+    ASSERT_EQ(mixit_session_set_audio_insert_bypass(m.session, a, 1, 0), MIXIT_OK);
+
+    // State round trip into the other slot: two ×2 inserts = +12 dB.
+    uint32_t size = 0;
+    ASSERT_EQ(mixit_session_get_audio_insert_state(m.session, a, 1, nullptr, 0, &size), MIXIT_OK);
+    std::vector<uint8_t> state(size);
+    ASSERT_EQ(mixit_session_get_audio_insert_state(m.session, a, 1, state.data(), size, &size), MIXIT_OK);
+    ic.slot = 0;
+    ic.state = state.data();
+    ic.state_size = size;
+    ASSERT_EQ(mixit_session_set_audio_insert(m.session, a, &ic), MIXIT_OK) << last_error();
+    wait_ms(100);
+    m.drain(MIXIT_AUDIO_BUS_MASTER);
+    EXPECT_NEAR(db(tone_level(m.collect(MIXIT_AUDIO_BUS_MASTER, 9600), 1000)), -20.0 + 12.04, 0.3);
+
+    ASSERT_EQ(mixit_session_remove_audio_insert(m.session, a, 0), MIXIT_OK);
+    ASSERT_EQ(mixit_session_remove_audio_insert(m.session, a, 1), MIXIT_OK);
+    EXPECT_EQ(mixit_session_remove_audio_insert(m.session, a, 1), MIXIT_E_NOT_FOUND);
+    wait_ms(100);
+    m.drain(MIXIT_AUDIO_BUS_MASTER);
+    EXPECT_NEAR(db(tone_level(m.collect(MIXIT_AUDIO_BUS_MASTER, 9600), 1000)), -20.0, 0.3);
+
+    ic.slot = 2;
+    EXPECT_EQ(mixit_session_set_audio_insert(m.session, a, &ic), MIXIT_E_INVALID_ARGUMENT);
+    ic.slot = 0;
+    ic.class_id = "00000000000000000000000000000000";
+    ic.state = nullptr;
+    ic.state_size = 0;
+    EXPECT_EQ(mixit_session_set_audio_insert(m.session, a, &ic), MIXIT_E_NOT_FOUND);
+    EXPECT_EQ(mixit_session_stop(m.session), MIXIT_OK);
+}
+#endif

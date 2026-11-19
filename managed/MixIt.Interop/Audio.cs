@@ -224,3 +224,17 @@ public sealed record AudioOutputStatistics(
     ulong DroppedFrames,
     double DriftRatio,
     string DeviceName);
+
+/// <summary>A VST3 effect class found by a plug-in scan (EXPERIMENTAL).</summary>
+public sealed record Vst3Plugin(string Path, string ClassId, string Name, string Vendor, string Version, string Subcategories)
+{
+    public string DisplayName => Vendor.Length == 0 ? Name : $"{Name} ({Vendor})";
+}
+
+/// <summary>An effect loaded in an insert slot of a mixer strip.</summary>
+public sealed record AudioInsert(int Slot, string ClassId, string Name, string Vendor, bool Bypass, int ParameterCount,
+    int LatencySamples, ulong ProcessErrors);
+
+/// <summary>One plug-in parameter; values are normalized 0..1.</summary>
+public sealed record AudioInsertParameter(uint Id, string Title, string Units, int StepCount, double DefaultValue,
+    double Value, string Display, bool ReadOnly, bool IsBypass);

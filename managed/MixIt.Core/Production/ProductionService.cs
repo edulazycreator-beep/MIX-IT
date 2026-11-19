@@ -288,6 +288,68 @@ public sealed class ProductionService : IDisposable
 
     public void ResetLoudness(AudioBus bus) => RequireSession().ResetLoudness(bus);
 
+    // ---- VST3 inserts (EXPERIMENTAL) ----
+
+    /// <summary>Scans for VST3 effects on a worker thread (loads every plug-in binary).</summary>
+    public Task<IReadOnlyList<Vst3Plugin>> ScanPluginsAsync(string? path = null) =>
+        EngineAvailable ? Task.Run(() => _host.ScanVst3(path)) : Task.FromResult<IReadOnlyList<Vst3Plugin>>([]);
+
+    /// <summary>Insert slots of a strip (null = empty slot).</summary>
+    public IReadOnlyList<AudioInsert?> GetInserts(uint inputId)
+    {
+        NativeSession session = RequireSession();
+        var list = new AudioInsert?[NativeSession.AudioInsertSlots];
+        for (int slot = 0; slot < list.Length; slot++) list[slot] = session.GetAudioInsert(inputId, slot);
+        return list;
+    }
+
+    /// <summary>
+    /// Loads a plug-in into a slot (on a worker thread: plug-ins can take seconds to load);
+    /// kept, with its state, across rebuilds.
+    /// </summary>
+    public async Task SetInsertAsync(uint inputId, int slot, Vst3Plugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+        _ = SpecOf(inputId);
+        NativeSession session = RequireSession();
+        await Task.Run(() => session.SetAudioInsert(inputId, slot, plugin.Path, plugin.ClassId));
+        if (!ReferenceEquals(session, _session))
+        {
+            throw new InvalidOperationException("The production was rebuilt while the plug-in was loading; load it again.");
+        }
+        InputSpec spec = SpecOf(inputId);  // the input may have been removed meanwhile
+        spec.Inserts[slot] = new InsertSpec(plugin) { State = session.GetAudioInsertState(inputId, slot) };
+        _logger.LogInformation("Input {Id} insert {Slot}: {Plugin}", inputId, slot, plugin.DisplayName);
+        RaiseChanged();
+    }
+
+    public void RemoveInsert(uint inputId, int slot)
+    {
+        InputSpec spec = SpecOf(inputId);
+        RequireSession().RemoveAudioInsert(inputId, slot);
+        spec.Inserts[slot] = null;
+        RaiseChanged();
+    }
+
+    public void SetInsertBypass(uint inputId, int slot, bool bypass)
+    {
+        InputSpec spec = SpecOf(inputId);
+        RequireSession().SetAudioInsertBypass(inputId, slot, bypass);
+        if (spec.Inserts[slot] is { } insert) insert.Bypass = bypass;
+    }
+
+    public IReadOnlyList<AudioInsertParameter> GetInsertParameters(uint inputId, int slot) =>
+        RequireSession().GetAudioInsertParameters(inputId, slot);
+
+    public AudioInsertParameter GetInsertParameter(uint inputId, int slot, int index) =>
+        RequireSession().GetAudioInsertParameter(inputId, slot, index);
+
+    public void SetInsertParameter(uint inputId, int slot, uint parameterId, double normalized)
+    {
+        _ = SpecOf(inputId);
+        RequireSession().SetAudioInsertParameter(inputId, slot, parameterId, normalized);
+    }
+
     /// <summary>Selected monitor output device id (null = off; "" = default device).</summary>
     public string? AudioOutputDeviceId => _audioOutput?.DeviceId;
 
@@ -411,6 +473,7 @@ public sealed class ProductionService : IDisposable
                 uint id = AddToSession(session, _specs[i]);
                 _inputs[i] = _inputs[i] with { Id = id, Detail = Describe(_specs[i]) };
                 if (_specs[i].Strip is { } strip) session.SetAudioStrip(id, strip);
+                ReapplyInserts(session, id, _specs[i]);
             }
             foreach ((AudioBus bus, AudioBusSettings settings) in _buses) session.SetAudioBus(bus, settings);
             session.SetMonitorSource(_monitorSource);
@@ -431,8 +494,57 @@ public sealed class ProductionService : IDisposable
         if (!CanEditInputs) throw new InvalidOperationException($"Stop production to {action}.");
     }
 
+    private void ReapplyInserts(NativeSession session, uint id, InputSpec spec)
+    {
+        for (int slot = 0; slot < spec.Inserts.Length; slot++)
+        {
+            if (spec.Inserts[slot] is not { } insert) continue;
+            try
+            {
+                session.SetAudioInsert(id, slot, insert.Plugin.Path, insert.Plugin.ClassId, insert.State);
+                if (insert.Bypass) session.SetAudioInsertBypass(id, slot, true);
+            }
+            catch (MixItNativeException ex)
+            {
+                // A plug-in that no longer loads must not block the rest of the production.
+                _logger.LogError("Input {Id} insert {Slot} ({Plugin}) could not be restored: {Message}", id, slot,
+                    insert.Plugin.DisplayName, ex.Message);
+                spec.Inserts[slot] = null;
+            }
+        }
+    }
+
+    /// <summary>Keeps the plug-in settings so a rebuilt session gets them back.</summary>
+    private void SnapshotInserts()
+    {
+        if (_session is null) return;
+        for (int i = 0; i < _specs.Count; i++)
+        {
+            for (int slot = 0; slot < _specs[i].Inserts.Length; slot++)
+            {
+                if (_specs[i].Inserts[slot] is not { } insert) continue;
+                try
+                {
+                    insert.State = _session.GetAudioInsertState(_inputs[i].Id, slot);
+                }
+                catch (MixItNativeException)
+                {
+                    // Session already closed (engine stopped): keep the last snapshot.
+                }
+            }
+        }
+    }
+
+    private InputSpec SpecOf(uint inputId)
+    {
+        int index = _inputs.FindIndex(i => i.Id == inputId);
+        if (index < 0) throw new ArgumentException($"No input {inputId}.", nameof(inputId));
+        return _specs[index];
+    }
+
     private void DisposeSession()
     {
+        SnapshotInserts();
         _session?.Dispose();
         _session = null;
         IsRunning = false;
@@ -445,5 +557,14 @@ public sealed class ProductionService : IDisposable
     {
         /// <summary>Operator's strip settings (null = engine defaults); reapplied after a rebuild.</summary>
         public AudioStripSettings? Strip { get; set; }
+
+        /// <summary>Plug-in inserts (null = empty slot).</summary>
+        public InsertSpec?[] Inserts { get; } = new InsertSpec?[NativeSession.AudioInsertSlots];
+    }
+
+    private sealed record InsertSpec(Vst3Plugin Plugin)
+    {
+        public byte[]? State { get; set; }
+        public bool Bypass { get; set; }
     }
 }

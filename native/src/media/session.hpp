@@ -29,6 +29,7 @@
 
 #include "audio/audio_device.hpp"
 #include "audio/channel_strip.hpp"
+#include "audio/vst3_host.hpp"
 #include "core/status.hpp"
 #include "media/compositor.hpp"
 #include "media/media_queue.hpp"
@@ -211,6 +212,34 @@ public:
     // Audio-only input from a capture device ("" = default; "mixit:null[:ppm]" = test device).
     Status add_audio_capture_source(const std::string& device_id, std::uint32_t& out_input_id);
 
+    // ---- plug-in inserts (M4, EXPERIMENTAL): VST3 effects before the strip DSP ----
+    static constexpr std::uint32_t kInsertSlots = 2;
+    struct InsertInfo {
+        audio::Vst3PluginInfo plugin;
+        bool bypass = false;
+        std::uint32_t parameter_count = 0;
+        std::uint32_t latency_samples = 0;
+        std::uint64_t process_errors = 0;
+    };
+    struct InsertParameter {
+        audio::Vst3ParameterInfo info;
+        double value = 0.0;
+        std::string display;
+    };
+    // Any time, also while running. Loads the plug-in (slow; outside the
+    // control lock), applies `state` if given, then swaps it in; a replaced
+    // effect is released once the audio thread no longer uses it.
+    Status set_audio_insert(std::uint32_t input_id, std::uint32_t slot, const std::string& path,
+                            const std::string& class_id, const std::vector<std::uint8_t>& plugin_state);
+    Status remove_audio_insert(std::uint32_t input_id, std::uint32_t slot);
+    Status set_audio_insert_bypass(std::uint32_t input_id, std::uint32_t slot, bool bypass);
+    Status get_audio_insert(std::uint32_t input_id, std::uint32_t slot, InsertInfo& out) const;
+    Status get_audio_insert_parameter(std::uint32_t input_id, std::uint32_t slot, std::uint32_t index,
+                                      InsertParameter& out) const;
+    Status set_audio_insert_parameter(std::uint32_t input_id, std::uint32_t slot, std::uint32_t parameter_id,
+                                      double normalized);
+    Status get_audio_insert_state(std::uint32_t input_id, std::uint32_t slot, std::vector<std::uint8_t>& out) const;
+
     // Pops whole mixed blocks of a bus (interleaved float, session channels)
     // into `dest` (capacity in sample frames). NOT_FOUND if none is waiting.
     // One consumer per bus (diagnostics, tests); outputs get their own taps (M5).
@@ -320,6 +349,12 @@ private:
     std::atomic<std::int32_t> output_bus_{-1};
     std::atomic<std::uint64_t> output_dropped_frames_{0};
     std::atomic<std::uint64_t> audio_blocks_{0}, audio_late_blocks_{0}, audio_skipped_blocks_{0};
+    // Insert hand-over: the audio thread bumps the epoch after every block;
+    // a removed effect is destroyed only after the epoch has moved on.
+    std::atomic<std::uint64_t> audio_epoch_{0};
+    std::atomic<bool> audio_running_{false};
+    void retire_effect(std::unique_ptr<audio::Vst3Effect> fx) noexcept;
+    Status find_insert(std::uint32_t input_id, std::uint32_t slot, Input*& out) const;  // control_mutex_ held
     std::atomic<std::int64_t> audio_max_lateness_ns_{0};
 };
 

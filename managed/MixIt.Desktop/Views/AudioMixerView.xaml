@@ -137,7 +137,7 @@
                             <Slider Value="{Binding EqHighDb}" Minimum="-15" Maximum="15" Style="{StaticResource DetailSlider}" />
                         </DockPanel>
                     </StackPanel>
-                    <StackPanel>
+                    <StackPanel Margin="0,0,24,0">
                         <TextBlock Text="DYNAMICS" Style="{StaticResource Label}" />
                         <DockPanel Margin="0,2">
                             <CheckBox Content="Gate" IsChecked="{Binding GateEnabled}" Width="90" Style="{StaticResource StudioCheckBox}" Margin="0" />
@@ -159,6 +159,55 @@
                             <TextBlock DockPanel.Dock="Right" Text="{Binding CompressorMakeupDb, StringFormat={}{0:0.0} dB}" Width="56" />
                             <Slider Value="{Binding CompressorMakeupDb}" Minimum="0" Maximum="24" Style="{StaticResource DetailSlider}" />
                         </DockPanel>
+                    </StackPanel>
+                    <!-- VST3 inserts (EXPERIMENTAL): before the strip processing -->
+                    <StackPanel MinWidth="300">
+                        <TextBlock Text="PLUG-INS (VST3, EXPERIMENTAL)" Style="{StaticResource Label}"
+                                   ToolTip="Effects run inside the engine: a faulty plug-in can stop the engine. Latency is not compensated yet." />
+                        <DockPanel Margin="0,2,0,6"
+                                   DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                            <Button DockPanel.Dock="Right" Content="Scan" Command="{Binding ScanPluginsCommand}" Margin="6,0,0,0"
+                                    ToolTip="Scan the default VST3 folders (loads every plug-in)" />
+                            <ComboBox ItemsSource="{Binding AvailablePlugins}" SelectedItem="{Binding SelectedPlugin}"
+                                      DisplayMemberPath="DisplayName" MinWidth="200" ToolTip="{Binding PluginStatus}" />
+                        </DockPanel>
+                        <ItemsControl ItemsSource="{Binding Inserts}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,0,8">
+                                        <DockPanel>
+                                            <TextBlock Text="{Binding SlotName}" Width="60" Foreground="{StaticResource TextSecondaryBrush}"
+                                                       VerticalAlignment="Center" />
+                                            <Button DockPanel.Dock="Right" Content="Remove" Command="{Binding RemoveCommand}" Margin="4,0,0,0" />
+                                            <Button DockPanel.Dock="Right" Content="Load" Command="{Binding LoadCommand}" Margin="4,0,0,0"
+                                                    ToolTip="Load the plug-in selected above into this slot" />
+                                            <ToggleButton DockPanel.Dock="Right" Content="BYP" IsChecked="{Binding Bypass}"
+                                                          IsEnabled="{Binding IsLoaded}" Style="{StaticResource StripToggle}" />
+                                            <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Notes}" FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"
+                                                   TextWrapping="Wrap" />
+                                        <ScrollViewer MaxHeight="140" VerticalScrollBarVisibility="Auto">
+                                            <ItemsControl ItemsSource="{Binding Parameters}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <DockPanel Margin="60,1,0,1">
+                                                            <TextBlock Text="{Binding Title}" Width="110" TextTrimming="CharacterEllipsis"
+                                                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding Display}" Width="64"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                            <Slider Value="{Binding Value}" Minimum="0" Maximum="1" IsEnabled="{Binding IsEditable}"
+                                                                    SmallChange="{Binding Step}" LargeChange="0.1" TickFrequency="{Binding Step}"
+                                                                    IsSnapToTickEnabled="{Binding IsStepped}" Style="{StaticResource DetailSlider}" />
+                                                        </DockPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </StackPanel>
                 </WrapPanel>
             </StackPanel>

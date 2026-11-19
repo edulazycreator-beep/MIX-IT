@@ -10,6 +10,13 @@
     <ProjectReference Include="..\..\MixIt.Core\MixIt.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Lets tests find artefacts built next to the engine (e.g. the VST3 test plug-in). -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>MixItNativeDir</_Parameter1>
+      <_Parameter2>$(MixItNativeDir)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />

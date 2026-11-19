@@ -2,6 +2,7 @@
 // (audio mixer). Not part of any public interface.
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -76,6 +77,10 @@ struct Session::Input {
     TripleBuffer<audio::StripMeters> strip_meters;
     audio::SampleFifo fifo;           // audio thread only
     audio::ChannelStrip strip;        // audio thread only
+    // VST3 inserts: the audio thread reads `inserts`; `insert_owned` keeps
+    // the effects alive and is changed under the session control mutex.
+    std::array<std::atomic<audio::Vst3Effect*>, Session::kInsertSlots> inserts{};
+    std::array<std::unique_ptr<audio::Vst3Effect>, Session::kInsertSlots> insert_owned;
     bool click_active = false;        // audio thread only
     std::atomic<std::int64_t> last_click_ns{0};
     std::atomic<std::uint64_t> click_seq{0};

@@ -29,6 +29,8 @@ public sealed class AudioMixerViewModel : ObservableObject
     private DeviceChoice _selectedOutput = DeviceChoice.Off;
     private AudioDevice? _selectedInputDevice;
     private string _outputStatus = "";
+    private Vst3Plugin? _selectedPlugin;
+    private string _pluginStatus = "Not scanned yet";
 
     public AudioMixerViewModel(ProductionService production, ILogger<AudioMixerViewModel> logger)
     {
@@ -46,6 +48,7 @@ public sealed class AudioMixerViewModel : ObservableObject
         RefreshDevicesCommand = new RelayCommand(_ => Guard(RefreshDevices), _ => _production.EngineAvailable);
         AddAudioInputCommand = new RelayCommand(_ => Guard(() => _production.AddAudioCapture(_selectedInputDevice!)),
             _ => _selectedInputDevice is not null && _production.CanEditInputs && _production.EngineAvailable);
+        ScanPluginsCommand = new AsyncCommand(ScanPluginsAsync, () => _production.EngineAvailable);
         Sync();
     }
 
@@ -97,6 +100,58 @@ public sealed class AudioMixerViewModel : ObservableObject
         if (OutputChoices.Count == 2 && InputDevices.Count == 0) OutputStatus = "No audio devices found.";
     }
 
+    /// <summary>VST3 effects found by the last scan (default plug-in folders).</summary>
+    public ObservableCollection<Vst3Plugin> AvailablePlugins { get; } = [];
+    public AsyncCommand ScanPluginsCommand { get; }
+
+    /// <summary>Plug-in chosen for "Load" in an insert slot.</summary>
+    public Vst3Plugin? SelectedPlugin
+    {
+        get => _selectedPlugin;
+        set => SetProperty(ref _selectedPlugin, value);
+    }
+
+    public string PluginStatus
+    {
+        get => _pluginStatus;
+        private set => SetProperty(ref _pluginStatus, value);
+    }
+
+    private async Task ScanPluginsAsync()
+    {
+        PluginStatus = "Scanning plug-in folders…";
+        try
+        {
+            IReadOnlyList<Vst3Plugin> found = await _production.ScanPluginsAsync();
+            AvailablePlugins.Clear();
+            foreach (Vst3Plugin p in found.OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase)) AvailablePlugins.Add(p);
+            SelectedPlugin = AvailablePlugins.FirstOrDefault();
+            PluginStatus = found.Count == 0 ? "No VST3 effects found" : $"{found.Count} VST3 effect(s) found";
+        }
+        catch (Exception ex) when (ex is MixItNativeException or InvalidOperationException)
+        {
+            _logger.LogWarning(ex, "Plug-in scan failed");
+            PluginStatus = "Scan failed: " + ex.Message;
+        }
+    }
+
+    internal Task ScanPluginsAsyncForTest() => ScanPluginsAsync();
+
+    /// <summary>Async variant of <see cref="Guard"/> for slow engine operations.</summary>
+    internal async Task GuardAsync(Func<Task> action)
+    {
+        Error = null;
+        try
+        {
+            await action();
+        }
+        catch (Exception ex) when (ex is MixItNativeException or InvalidOperationException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Audio mixer operation failed");
+            Error = ex.Message;
+        }
+    }
+
     public ObservableCollection<StripViewModel> Strips { get; } = [];
     public ObservableCollection<BusViewModel> Buses { get; } = [];
     public BusViewModel MonitorBus { get; }
@@ -109,6 +164,7 @@ public sealed class AudioMixerViewModel : ObservableObject
         {
             if (!SetProperty(ref _selected, value)) return;
             OnPropertyChanged(nameof(HasSelection));
+            if (value is not null) Guard(value.LoadInserts);
         }
     }
 
@@ -284,6 +340,17 @@ public sealed class StripViewModel : MeteredViewModel
         _s = settings;
         _owner = owner;
         SelectCommand = new RelayCommand(_ => _owner.Selected = this);
+        for (int slot = 0; slot < NativeSession.AudioInsertSlots; slot++) Inserts.Add(new InsertSlotViewModel(this, slot, owner));
+    }
+
+    /// <summary>VST3 insert slots (before the strip processing).</summary>
+    public ObservableCollection<InsertSlotViewModel> Inserts { get; } = [];
+
+    /// <summary>Reads the insert slots from the engine (when the strip is shown in detail).</summary>
+    public void LoadInserts()
+    {
+        IReadOnlyList<AudioInsert?> current = _owner.Production.GetInserts(Id);
+        for (int slot = 0; slot < Inserts.Count; slot++) Inserts[slot].Show(current[slot]);
     }
 
     public uint Id { get; }
@@ -444,5 +511,128 @@ public sealed class BusViewModel : MeteredViewModel
             _s = next;
         });
         OnPropertyChanged(string.Empty);
+    }
+}
+
+/// <summary>One plug-in insert slot of a strip, with a generic parameter editor.</summary>
+public sealed class InsertSlotViewModel : ObservableObject
+{
+    private readonly StripViewModel _strip;
+    private readonly AudioMixerViewModel _owner;
+    private AudioInsert? _insert;
+
+    internal InsertSlotViewModel(StripViewModel strip, int slot, AudioMixerViewModel owner)
+    {
+        _strip = strip;
+        _owner = owner;
+        Slot = slot;
+        LoadCommand = new AsyncCommand(LoadAsync, () => _owner.SelectedPlugin is not null && _owner.Production.EngineAvailable);
+        RemoveCommand = new RelayCommand(_ => _owner.Guard(() =>
+        {
+            _owner.Production.RemoveInsert(_strip.Id, Slot);
+            Show(null);
+        }), _ => _insert is not null);
+    }
+
+    public int Slot { get; }
+    public string SlotName => $"Insert {Slot + 1}";
+    public bool IsLoaded => _insert is not null;
+    public string Title => _insert is null ? "empty" : _insert.Vendor.Length == 0 ? _insert.Name : $"{_insert.Name} · {_insert.Vendor}";
+
+    /// <summary>Problems the operator should know about (latency not compensated, failed blocks).</summary>
+    public string Notes => _insert is null
+        ? ""
+        : string.Join("  ", new[]
+        {
+            _insert.LatencySamples > 0 ? $"latency {_insert.LatencySamples} samples (not compensated)" : "",
+            _insert.ProcessErrors > 0 ? $"{_insert.ProcessErrors} failed blocks (passed through)" : "",
+        }.Where(t => t.Length > 0));
+
+    public bool Bypass
+    {
+        get => _insert?.Bypass ?? false;
+        set
+        {
+            if (_insert is null || _insert.Bypass == value) return;
+            _owner.Guard(() =>
+            {
+                _owner.Production.SetInsertBypass(_strip.Id, Slot, value);
+                _insert = _insert with { Bypass = value };
+            });
+            OnPropertyChanged();
+        }
+    }
+
+    public ObservableCollection<PluginParameterViewModel> Parameters { get; } = [];
+    public AsyncCommand LoadCommand { get; }
+    public ICommand RemoveCommand { get; }
+
+    internal void Show(AudioInsert? insert)
+    {
+        _insert = insert;
+        Parameters.Clear();
+        if (insert is not null)
+        {
+            IReadOnlyList<AudioInsertParameter> list = _owner.Production.GetInsertParameters(_strip.Id, Slot);
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i].IsBypass) continue;  // the slot's Bypass toggle covers it
+                Parameters.Add(new PluginParameterViewModel(this, i, list[i]));
+            }
+        }
+        OnPropertyChanged(nameof(IsLoaded));
+        OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(Notes));
+        OnPropertyChanged(nameof(Bypass));
+    }
+
+    internal AudioInsertParameter SetParameter(int index, uint id, double value)
+    {
+        _owner.Production.SetInsertParameter(_strip.Id, Slot, id, value);
+        return _owner.Production.GetInsertParameter(_strip.Id, Slot, index);
+    }
+
+    internal void Guard(Action action) => _owner.Guard(action);
+
+    private Task LoadAsync() => _owner.GuardAsync(async () =>
+    {
+        Vst3Plugin plugin = _owner.SelectedPlugin!;
+        await _owner.Production.SetInsertAsync(_strip.Id, Slot, plugin);
+        // SetInsertAsync raises Changed, which rebuilds the strips; refresh this one if it survived.
+        Show(_owner.Production.GetInserts(_strip.Id)[Slot]);
+    });
+}
+
+/// <summary>A plug-in parameter as a 0..1 slider with the plug-in's own value text.</summary>
+public sealed class PluginParameterViewModel : ObservableObject
+{
+    private readonly InsertSlotViewModel _slot;
+    private readonly int _index;
+    private AudioInsertParameter _p;
+
+    internal PluginParameterViewModel(InsertSlotViewModel slot, int index, AudioInsertParameter parameter)
+    {
+        _slot = slot;
+        _index = index;
+        _p = parameter;
+    }
+
+    public string Title => _p.Units.Length == 0 ? _p.Title : $"{_p.Title} ({_p.Units})";
+    public bool IsEditable => !_p.ReadOnly;
+    public bool IsStepped => _p.StepCount > 0;
+    public double Step => _p.StepCount > 0 ? 1.0 / _p.StepCount : 0.01;
+    public string Display => _p.Display.Length > 0 ? _p.Display : _p.Value.ToString("0.00", CultureInfo.InvariantCulture);
+
+    public double Value
+    {
+        get => _p.Value;
+        set
+        {
+            double v = Math.Clamp(value, 0, 1);
+            if (Math.Abs(v - _p.Value) < 1e-9 || _p.ReadOnly) return;
+            _slot.Guard(() => _p = _slot.SetParameter(_index, _p.Id, v));
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(Display));
+        }
     }
 }

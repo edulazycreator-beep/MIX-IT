@@ -545,6 +545,99 @@ public sealed unsafe class NativeSession : IDisposable
 
     private static TimeSpan FromNs(long ns) => TimeSpan.FromTicks(ns / 100);
 
+    // ---- VST3 inserts (EXPERIMENTAL) ----
+
+    /// <summary>Number of insert slots per strip (before the strip DSP).</summary>
+    public const int AudioInsertSlots = 2;
+
+    /// <summary>Loads a plug-in into a slot (replacing any effect there); optional state from <see cref="GetAudioInsertState"/>.</summary>
+    public void SetAudioInsert(uint inputId, int slot, string path, string classId, byte[]? state = null)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(classId);
+        ArgumentOutOfRangeException.ThrowIfNegative(slot);
+        byte* p = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(path);
+        byte* c = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(classId);
+        try
+        {
+            fixed (byte* st = state)
+            {
+                var cfg = new MixitAudioInsertConfig
+                {
+                    StructSize = (uint)sizeof(MixitAudioInsertConfig), Slot = (uint)slot, Path = p, ClassId = c,
+                    State = st, StateSize = state is null ? 0u : (uint)state.Length,
+                };
+                Check(NativeMethods.mixit_session_set_audio_insert(_handle, inputId, &cfg), "mixit_session_set_audio_insert");
+            }
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)p);
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)c);
+        }
+    }
+
+    public void RemoveAudioInsert(uint inputId, int slot) =>
+        Check(NativeMethods.mixit_session_remove_audio_insert(_handle, inputId, (uint)slot), "mixit_session_remove_audio_insert");
+
+    public void SetAudioInsertBypass(uint inputId, int slot, bool bypass) =>
+        Check(NativeMethods.mixit_session_set_audio_insert_bypass(_handle, inputId, (uint)slot, bypass ? 1 : 0),
+            "mixit_session_set_audio_insert_bypass");
+
+    /// <summary>The effect in a slot, or null when the slot is empty.</summary>
+    public AudioInsert? GetAudioInsert(uint inputId, int slot)
+    {
+        MixitAudioInsertInfo i = default;
+        i.StructSize = (uint)sizeof(MixitAudioInsertInfo);
+        NativeResult r = NativeMethods.mixit_session_get_audio_insert(_handle, inputId, (uint)slot, &i);
+        if (r == NativeResult.NotFound && slot >= 0 && slot < AudioInsertSlots) return null;
+        Check(r, "mixit_session_get_audio_insert");
+        return new AudioInsert(slot, Utf8.FromNullTerminated(i.ClassId, 40), Utf8.FromNullTerminated(i.Name, 128),
+            Utf8.FromNullTerminated(i.Vendor, 128), (i.Flags & 1) != 0, (int)i.ParameterCount, (int)i.LatencySamples,
+            i.ProcessErrors);
+    }
+
+    public IReadOnlyList<AudioInsertParameter> GetAudioInsertParameters(uint inputId, int slot)
+    {
+        AudioInsert insert = GetAudioInsert(inputId, slot)
+            ?? throw new MixItNativeException(NativeResult.NotFound, "mixit_session_get_audio_insert", "insert slot is empty");
+        var list = new List<AudioInsertParameter>(insert.ParameterCount);
+        for (int index = 0; index < insert.ParameterCount; index++) list.Add(GetAudioInsertParameter(inputId, slot, index));
+        return list;
+    }
+
+    /// <summary>Parameter by index (0..ParameterCount-1), with its current value and display text.</summary>
+    public AudioInsertParameter GetAudioInsertParameter(uint inputId, int slot, int index)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        MixitAudioInsertParameter p = default;
+        p.StructSize = (uint)sizeof(MixitAudioInsertParameter);
+        Check(NativeMethods.mixit_session_get_audio_insert_parameter(_handle, inputId, (uint)slot, (uint)index, &p),
+            "mixit_session_get_audio_insert_parameter");
+        return new AudioInsertParameter(p.Id, Utf8.FromNullTerminated(p.Title, 128), Utf8.FromNullTerminated(p.Units, 32),
+            p.StepCount, p.DefaultValue, p.Value, Utf8.FromNullTerminated(p.Display, 64), (p.Flags & 1) != 0, (p.Flags & 2) != 0);
+    }
+
+    public void SetAudioInsertParameter(uint inputId, int slot, uint parameterId, double normalized) =>
+        Check(NativeMethods.mixit_session_set_audio_insert_parameter(_handle, inputId, (uint)slot, parameterId, normalized),
+            "mixit_session_set_audio_insert_parameter");
+
+    /// <summary>Opaque plug-in state (to restore with <see cref="SetAudioInsert"/>).</summary>
+    public byte[] GetAudioInsertState(uint inputId, int slot)
+    {
+        uint size = 0;
+        Check(NativeMethods.mixit_session_get_audio_insert_state(_handle, inputId, (uint)slot, null, 0, &size),
+            "mixit_session_get_audio_insert_state");
+        var buffer = new byte[size];
+        if (size == 0) return buffer;
+        fixed (byte* b = buffer)
+        {
+            Check(NativeMethods.mixit_session_get_audio_insert_state(_handle, inputId, (uint)slot, b, size, &size),
+                "mixit_session_get_audio_insert_state");
+        }
+        return buffer;
+    }
+
     private static void Check(NativeResult result, string function)
     {
         if (result != NativeResult.Ok)

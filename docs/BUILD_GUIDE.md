@@ -124,6 +124,12 @@ release build.
 | `MIXIT_WITH_FFMPEG` | AUTO | `AUTO` / `ON` (fail if missing) / `OFF` |
 | `MIXIT_REQUIRE_LGPL_FFMPEG` | ON on Windows, OFF elsewhere | reject non-LGPL FFmpeg at runtime |
 | `FFMPEG_ROOT` | env `FFMPEG_ROOT` | FFmpeg shared build (include/, lib/, bin/) |
+| `MIXIT_ENABLE_VST3` | ON | VST3 plug-in host (ADR-0008). Fetches the pinned `vst3_pluginterfaces` (MIT) with git at configure time; OFF builds without plug-ins |
+| `MIXIT_VST3_INTERFACES_DIR` | empty | offline: path of an existing checkout of the pinned commit; the folder itself must be named `pluginterfaces` (no download) |
+
+With tests enabled, the build also produces a small VST3 test plug-in at
+`build/<preset>/vst3/MixItTestGain.vst3` (used by the native and managed tests;
+not part of the product).
 
 ## Troubleshooting
 

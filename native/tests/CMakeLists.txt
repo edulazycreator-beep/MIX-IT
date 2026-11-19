@@ -31,11 +31,43 @@ add_executable(mixit_native_tests
     test_audio_dsp.cpp
     test_audio_mixer.cpp
     test_audio_drift.cpp
-    test_audio_devices.cpp)
+    test_audio_devices.cpp
+    test_vst3_host.cpp)
 target_include_directories(mixit_native_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_definitions(mixit_native_tests PRIVATE MIXIT_HAVE_FFMPEG=$<BOOL:${MIXIT_FFMPEG_FOUND}>)
 target_link_libraries(mixit_native_tests PRIVATE mixit_engine_core GTest::gtest_main)
 mixit_apply_compiler_options(mixit_native_tests)
+
+# A real VST3 bundle built from the interface headers, so the plug-in host is
+# tested end to end on every platform.
+if(MIXIT_VST3_FOUND)
+    add_library(mixit_test_gain MODULE vst3_test_plugin/mixit_test_gain.cpp)
+    target_link_libraries(mixit_test_gain PRIVATE mixit_vst3_interfaces)
+    set(_bundle ${CMAKE_BINARY_DIR}/vst3/MixItTestGain.vst3)
+    if(WIN32)
+        set(_arch x86_64-win)
+        set(_suffix .vst3)
+    else()
+        set(_arch x86_64-linux)
+        set(_suffix .so)
+    endif()
+    set_target_properties(mixit_test_gain PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME MixItTestGain
+        SUFFIX ${_suffix}
+        CXX_VISIBILITY_PRESET hidden
+        LIBRARY_OUTPUT_DIRECTORY "${_bundle}/Contents/${_arch}$<0:>"
+        RUNTIME_OUTPUT_DIRECTORY "${_bundle}/Contents/${_arch}$<0:>")
+    if(MIXIT_ENABLE_SANITIZERS)
+        target_compile_options(mixit_test_gain PRIVATE -fsanitize=address,undefined)
+        target_link_options(mixit_test_gain PRIVATE -fsanitize=address,undefined)
+    elseif(MIXIT_ENABLE_TSAN)
+        target_compile_options(mixit_test_gain PRIVATE -fsanitize=thread)
+        target_link_options(mixit_test_gain PRIVATE -fsanitize=thread)
+    endif()
+    add_dependencies(mixit_native_tests mixit_test_gain)
+    target_compile_definitions(mixit_native_tests PRIVATE MIXIT_TEST_VST3_BUNDLE="${_bundle}")
+endif()
 
 include(GoogleTest)
 # PRE_TEST: list tests when ctest runs, not at build time, so cross builds

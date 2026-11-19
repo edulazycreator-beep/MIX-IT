@@ -11,6 +11,7 @@ set(MIXIT_CORE_SOURCES
     src/abi/media_library_abi.cpp
     src/abi/session_abi.cpp
     src/abi/audio_abi.cpp
+    src/abi/vst3_abi.cpp
     src/core/engine.cpp
     src/core/last_error.cpp
     src/logging/json.cpp
@@ -27,6 +28,7 @@ set(MIXIT_CORE_SOURCES
     src/audio/drift_resampler.cpp
     src/audio/audio_device.cpp
     src/audio/audio_device_wasapi.cpp
+    src/audio/vst3_host.cpp
     src/media/test_signal.cpp
     src/media/test_signal_source.cpp
     src/media/time_base.cpp
@@ -57,7 +59,11 @@ set_target_properties(mixit_engine_core PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON)
-target_link_libraries(mixit_engine_core PUBLIC Threads::Threads)
+target_link_libraries(mixit_engine_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+if(MIXIT_VST3_FOUND)
+    target_link_libraries(mixit_engine_core PUBLIC mixit_vst3_interfaces)
+endif()
+target_compile_definitions(mixit_engine_core PUBLIC MIXIT_HAVE_VST3=$<BOOL:${MIXIT_VST3_FOUND}>)
 if(WIN32)
     target_link_libraries(mixit_engine_core PUBLIC dxgi d3d11 mfuuid ole32)
 endif()

@@ -48,6 +48,9 @@ if ($env:FFMPEG_ROOT -and (Test-Path (Join-Path $env:FFMPEG_ROOT 'LICENSE.txt'))
     Copy-Item (Join-Path $env:FFMPEG_ROOT 'LICENSE.txt') (Join-Path $out 'FFMPEG_LICENSE.txt') -Force
 }
 Copy-Item (Join-Path $root 'docs/THIRD_PARTY_LICENSES.md') $out -Force
+# MIT: the VST3 interface code compiled into mixit_engine.dll needs its licence text.
+$vst3Licence = Join-Path $root 'build/windows-msvc/_deps/vst3/pluginterfaces/LICENSE.txt'
+if (Test-Path $vst3Licence) { Copy-Item $vst3Licence (Join-Path $out 'VST3_PLUGINTERFACES_LICENSE.txt') -Force }
 
 $version = (Select-String -Path (Join-Path $root 'native/include/mixit/mixit_engine.h') -Pattern 'MIXIT_API_VERSION_(MAJOR|MINOR|PATCH) (\d+)').Matches |
     ForEach-Object { $_.Groups[2].Value }

@@ -163,6 +163,35 @@ public class ProductionServiceTests
     }
 
     [Fact]
+    public async Task PluginInsertsAndTheirSettingsSurviveAFormatChange()
+    {
+        string? bundle = Vst3Tests.TestBundle();
+        if (bundle is null) return;  // test plug-in not built next to this engine
+        (EngineHost host, ProductionService service) = Create();
+        using (host)
+        using (service)
+        {
+            ProductionInput a = service.AddTestSignal();
+            Vst3Plugin plugin = Assert.Single(await service.ScanPluginsAsync(bundle));
+            await service.SetInsertAsync(a.Id, 1, plugin);
+            AudioInsertParameter gain = service.GetInsertParameters(a.Id, 1)[0];
+            service.SetInsertParameter(a.Id, 1, gain.Id, 0.75);
+            service.SetInsertBypass(a.Id, 1, true);
+
+            service.SetFormat(ProductionFormat.Standard.First(f => f.Width == 1280));  // rebuilds the session
+            uint id = service.Inputs[0].Id;
+            IReadOnlyList<AudioInsert?> inserts = service.GetInserts(id);
+            Assert.Null(inserts[0]);
+            Assert.Equal("MIX IT Test Gain", inserts[1]!.Name);
+            Assert.True(inserts[1]!.Bypass);
+            Assert.Equal("1.50", service.GetInsertParameters(id, 1)[0].Display);
+
+            service.RemoveInsert(id, 1);
+            Assert.Null(service.GetInserts(id)[1]);
+        }
+    }
+
+    [Fact]
     public async Task MonitorOutputAndAudioInputUseTheTestDevice()
     {
         (EngineHost host, ProductionService service) = Create();

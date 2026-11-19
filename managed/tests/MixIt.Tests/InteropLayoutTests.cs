@@ -38,6 +38,10 @@ public class InteropLayoutTests
         Assert.Equal(NativeStructSizes.AudioOutputConfig, Unsafe.SizeOf<MixitAudioOutputConfig>());
         Assert.Equal(NativeStructSizes.AudioOutputStats, Unsafe.SizeOf<MixitAudioOutputStats>());
         Assert.Equal(NativeStructSizes.AudioCaptureConfig, Unsafe.SizeOf<MixitAudioCaptureConfig>());
+        Assert.Equal(NativeStructSizes.Vst3PluginInfo, Unsafe.SizeOf<MixitVst3PluginInfo>());
+        Assert.Equal(NativeStructSizes.AudioInsertConfig, Unsafe.SizeOf<MixitAudioInsertConfig>());
+        Assert.Equal(NativeStructSizes.AudioInsertInfo, Unsafe.SizeOf<MixitAudioInsertInfo>());
+        Assert.Equal(NativeStructSizes.AudioInsertParameter, Unsafe.SizeOf<MixitAudioInsertParameter>());
         Assert.Equal(40, (int)Marshal.OffsetOf<MixitAudioOutputStats>(nameof(MixitAudioOutputStats.DriftRatio)));
     }
 

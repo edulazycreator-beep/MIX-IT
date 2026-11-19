@@ -12,7 +12,9 @@
 // Real-time rules on this thread: no locks, no allocation, no logging.
 // Parameters arrive through TripleBuffers; meters leave the same way.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <thread>
 #include <cstring>
 
 #include "media/session.hpp"
@@ -330,6 +332,9 @@ void Session::mix_block(std::int64_t k) noexcept {
         if (missing > 0 && in->fifo.head() > 0) {
             in->audio_underrun_frames.fetch_add(missing, std::memory_order_relaxed);
         }
+        for (auto& slot : in->inserts) {
+            if (audio::Vst3Effect* fx = slot.load(std::memory_order_acquire)) fx->process(mix_scratch_.data(), frames);
+        }
         float afv_gain = 1.0f;
         if (p.audio_follows_video) {
             const bool on_a = contains(afv.on_program, in->id);
@@ -392,6 +397,11 @@ void Session::mix_block(std::int64_t k) noexcept {
 
 void Session::audio_loop() noexcept {
     os::set_current_thread_name("mixit-audio");
+    audio_running_.store(true, std::memory_order_seq_cst);
+    struct Done {
+        std::atomic<bool>& flag;
+        ~Done() { flag.store(false, std::memory_order_seq_cst); }
+    } done{audio_running_};
     const Rate sr{config_.sample_rate, 1};
     const std::int64_t block_ns = duration_of_index(0, Rate{config_.sample_rate, audio_block_frames_});
     std::int64_t k = 0;
@@ -408,6 +418,7 @@ void Session::audio_loop() noexcept {
         const std::int64_t first = k * audio_block_frames_;
         for (auto& in : inputs_) drain_audio(*in, first);
         mix_block(k);
+        audio_epoch_.fetch_add(1, std::memory_order_seq_cst);
         audio_blocks_.fetch_add(1, std::memory_order_relaxed);
         ++k;
         // After a long stall, resynchronize instead of mixing a burst of stale blocks.
@@ -419,6 +430,141 @@ void Session::audio_loop() noexcept {
             }
         }
     }
+}
+
+
+// ---- plug-in inserts ------------------------------------------------------------
+
+void Session::retire_effect(std::unique_ptr<audio::Vst3Effect> fx) noexcept {
+    if (!fx) return;
+    const std::uint64_t seen = audio_epoch_.load(std::memory_order_seq_cst);
+    const auto deadline = monotonic_ns() + 2'000'000'000ull;
+    while (audio_running_.load(std::memory_order_seq_cst) &&
+           audio_epoch_.load(std::memory_order_seq_cst) < seen + 2) {
+        if (monotonic_ns() > deadline) {
+            // The audio thread is stuck (inside a plug-in?). Destroying the
+            // effect could crash it, so leak it deliberately.
+            logger_.log(MIXIT_LOG_ERROR, "audio", "audio thread did not release a plug-in within 2 s; leaking it");
+            (void)fx.release();
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    fx.reset();
+}
+
+Status Session::find_insert(std::uint32_t input_id, std::uint32_t slot, Input*& out) const {
+    if (slot >= kInsertSlots) return {MIXIT_E_INVALID_ARGUMENT, "insert slot out of range"};
+    Input* in = find_input(input_id);
+    if (in == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(input_id)};
+    if (!in->has_audio) return {MIXIT_E_INVALID_ARGUMENT, "input has no audio"};
+    out = in;
+    return Status::ok();
+}
+
+Status Session::set_audio_insert(std::uint32_t input_id, std::uint32_t slot, const std::string& path,
+                                 const std::string& class_id, const std::vector<std::uint8_t>& plugin_state) {
+    {
+        std::lock_guard lock(control_mutex_);
+        if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
+        Input* in = nullptr;
+        if (Status st = find_insert(input_id, slot, in); !st.is_ok()) return st;
+    }
+    // Loading a plug-in can take a long time: not under the control lock.
+    std::unique_ptr<audio::Vst3Effect> fx;
+    if (Status st = audio::Vst3Effect::create(path, class_id, static_cast<double>(config_.sample_rate), config_.channels,
+                                              audio_block_frames_, fx);
+        !st.is_ok()) {
+        logger_.logf(MIXIT_LOG_WARNING, "audio", "VST3 insert {} on input {} failed: {}", slot, input_id, st.message());
+        return st;
+    }
+    if (!plugin_state.empty()) {
+        if (Status st = fx->set_state(plugin_state.data(), plugin_state.size()); !st.is_ok()) return st;
+    }
+    std::unique_ptr<audio::Vst3Effect> old;
+    {
+        std::lock_guard lock(control_mutex_);
+        Input* in = nullptr;
+        if (Status st = find_insert(input_id, slot, in); !st.is_ok()) return st;  // removed meanwhile
+        old = std::move(in->insert_owned[slot]);
+        in->insert_owned[slot] = std::move(fx);
+        in->inserts[slot].store(in->insert_owned[slot].get(), std::memory_order_release);
+        logger_.logf(MIXIT_LOG_INFO, "audio", "input {} insert {}: {} ({})", input_id, slot,
+                     in->insert_owned[slot]->info().name, in->insert_owned[slot]->info().vendor);
+        // The old effect may still be in use by the current block.
+        retire_effect(std::move(old));
+    }
+    return Status::ok();
+}
+
+Status Session::remove_audio_insert(std::uint32_t input_id, std::uint32_t slot) {
+    std::lock_guard lock(control_mutex_);
+    Input* in = nullptr;
+    if (Status st = find_insert(input_id, slot, in); !st.is_ok()) return st;
+    if (!in->insert_owned[slot]) return {MIXIT_E_NOT_FOUND, "insert slot is empty"};
+    in->inserts[slot].store(nullptr, std::memory_order_seq_cst);
+    retire_effect(std::move(in->insert_owned[slot]));
+    return Status::ok();
+}
+
+Status Session::set_audio_insert_bypass(std::uint32_t input_id, std::uint32_t slot, bool bypass) {
+    std::lock_guard lock(control_mutex_);
+    Input* in = nullptr;
+    if (Status st = find_insert(input_id, slot, in); !st.is_ok()) return st;
+    if (!in->insert_owned[slot]) return {MIXIT_E_NOT_FOUND, "insert slot is empty"};
+    in->insert_owned[slot]->set_bypass(bypass);
+    return Status::ok();
+}
+
+Status Session::get_audio_insert(std::uint32_t input_id, std::uint32_t slot, InsertInfo& out) const {
+    std::lock_guard lock(control_mutex_);
+    Input* in = nullptr;
+    if (Status st = find_insert(input_id, slot, in); !st.is_ok()) return st;
+    const audio::Vst3Effect* fx = in->insert_owned[slot].get();
+    if (fx == nullptr) return {MIXIT_E_NOT_FOUND, "insert slot is empty"};
+    out.plugin = fx->info();
+    out.bypass = fx->bypass();
+    out.parameter_count = static_cast<std::uint32_t>(fx->parameters().size());
+    out.latency_samples = fx->latency_samples();
+    out.process_errors = fx->process_errors();
+    return Status::ok();
+}
+
+Status Session::get_audio_insert_parameter(std::uint32_t input_id, std::uint32_t slot, std::uint32_t index,
+                                           InsertParameter& out) const {
+    std::lock_guard lock(control_mutex_);
+    Input* in = nullptr;
+    if (Status st = find_insert(input_id, slot, in); !st.is_ok()) return st;
+    const audio::Vst3Effect* fx = in->insert_owned[slot].get();
+    if (fx == nullptr) return {MIXIT_E_NOT_FOUND, "insert slot is empty"};
+    if (index >= fx->parameters().size()) return {MIXIT_E_NOT_FOUND, "parameter index out of range"};
+    out.info = fx->parameters()[index];
+    if (Status st = fx->get_parameter(out.info.id, out.value); !st.is_ok()) out.value = out.info.default_normalized;
+    out.display = fx->parameter_text(out.info.id, out.value);
+    return Status::ok();
+}
+
+Status Session::set_audio_insert_parameter(std::uint32_t input_id, std::uint32_t slot, std::uint32_t parameter_id,
+                                           double normalized) {
+    std::lock_guard lock(control_mutex_);
+    Input* in = nullptr;
+    if (Status st = find_insert(input_id, slot, in); !st.is_ok()) return st;
+    if (!in->insert_owned[slot]) return {MIXIT_E_NOT_FOUND, "insert slot is empty"};
+    if (Status st = in->insert_owned[slot]->set_parameter(parameter_id, normalized); !st.is_ok()) return st;
+    // Without an audio thread (session stopped) nothing would deliver the
+    // change to the processor, and a state saved now would miss it. The
+    // control mutex keeps the audio thread from starting meanwhile.
+    if (!audio_thread_.joinable()) in->insert_owned[slot]->process(nullptr, 0);
+    return Status::ok();
+}
+
+Status Session::get_audio_insert_state(std::uint32_t input_id, std::uint32_t slot,
+                                       std::vector<std::uint8_t>& out) const {
+    std::lock_guard lock(control_mutex_);
+    Input* in = nullptr;
+    if (Status st = find_insert(input_id, slot, in); !st.is_ok()) return st;
+    if (!in->insert_owned[slot]) return {MIXIT_E_NOT_FOUND, "insert slot is empty"};
+    return in->insert_owned[slot]->get_state(out);
 }
 
 }  // namespace mixit::media

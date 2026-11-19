@@ -31,6 +31,7 @@ endif()
 
 include(cmake/MixItCompilerOptions.cmake)
 include(cmake/MixItFfmpeg.cmake)
+include(cmake/MixItVst3.cmake)
 
 add_subdirectory(native)
 

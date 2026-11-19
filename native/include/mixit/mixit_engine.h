@@ -801,6 +801,96 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_add_audio_capture_source(mixit_s
                                                                           const mixit_audio_capture_config* config,
                                                                           uint32_t* out_input_id);
 
+/* ---- VST3 plug-ins (API 0.4, EXPERIMENTAL) --------------------------------
+ * Effects run inside the engine process: a faulty plug-in can crash it
+ * (out-of-process hosting is planned, ADR-0008). Mono and stereo sessions
+ * only; no plug-in editors, sidechains or latency compensation yet. */
+
+#define MIXIT_AUDIO_INSERT_SLOTS 2
+
+typedef struct mixit_vst3_plugin_info {
+    uint32_t struct_size;
+    uint32_t reserved;
+    char     class_id[40];       /* 32 hex digits */
+    char     name[128];          /* UTF-8, truncated on a character boundary */
+    char     vendor[128];
+    char     version[64];
+    char     subcategories[128]; /* e.g. "Fx|Dynamics" */
+    char     path[512];          /* bundle path, never truncated (longer paths are skipped) */
+} mixit_vst3_plugin_info;
+
+/* Scans a .vst3 bundle or a folder (recursively), or the platform's default
+ * folders when path is NULL/"". Loads every plug-in binary: slow, call off the
+ * UI thread. Plug-ins that fail to load are logged and skipped. Capacity 0
+ * queries the count; caller sets each struct_size. */
+MIXIT_API mixit_result MIXIT_CALL mixit_scan_vst3(mixit_engine engine, const char* path,
+                                                  mixit_vst3_plugin_info* plugins, uint32_t capacity,
+                                                  uint32_t* out_count);
+
+typedef struct mixit_audio_insert_config {
+    uint32_t       struct_size;
+    uint32_t       slot;        /* 0..MIXIT_AUDIO_INSERT_SLOTS-1, before the strip DSP */
+    const char*    path;        /* from mixit_vst3_plugin_info.path */
+    const char*    class_id;    /* from mixit_vst3_plugin_info.class_id */
+    const uint8_t* state;       /* optional, from mixit_session_get_audio_insert_state */
+    uint32_t       state_size;
+    uint32_t       reserved;    /* 0 */
+} mixit_audio_insert_config;
+
+/* Any time, also while running (the plug-in is loaded before it is swapped
+ * in; replacing or removing waits for the current audio block). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_audio_insert(mixit_session session, uint32_t input_id,
+                                                                  const mixit_audio_insert_config* config);
+MIXIT_API mixit_result MIXIT_CALL mixit_session_remove_audio_insert(mixit_session session, uint32_t input_id,
+                                                                     uint32_t slot);
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_audio_insert_bypass(mixit_session session, uint32_t input_id,
+                                                                         uint32_t slot, int32_t bypass);
+
+#define MIXIT_AUDIO_INSERT_FLAG_BYPASS 0x1u
+
+typedef struct mixit_audio_insert_info {
+    uint32_t struct_size;
+    uint32_t flags;             /* MIXIT_AUDIO_INSERT_FLAG_* */
+    uint32_t parameter_count;
+    uint32_t latency_samples;   /* reported by the plug-in; not compensated yet */
+    uint64_t process_errors;    /* blocks the plug-in failed (input passed through) */
+    char     class_id[40];
+    char     name[128];
+    char     vendor[128];
+} mixit_audio_insert_info;
+
+/* NOT_FOUND when the slot is empty. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_audio_insert(mixit_session session, uint32_t input_id,
+                                                                  uint32_t slot, mixit_audio_insert_info* out_info);
+
+#define MIXIT_VST3_PARAM_READ_ONLY 0x1u
+#define MIXIT_VST3_PARAM_BYPASS    0x2u
+
+typedef struct mixit_audio_insert_parameter {
+    uint32_t struct_size;
+    uint32_t id;                /* pass to set_audio_insert_parameter */
+    uint32_t flags;             /* MIXIT_VST3_PARAM_* */
+    int32_t  step_count;        /* 0 = continuous */
+    double   default_value;     /* normalized 0..1 */
+    double   value;             /* normalized 0..1 */
+    char     title[128];
+    char     units[32];
+    char     display[64];       /* the value as text, from the plug-in */
+} mixit_audio_insert_parameter;
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_audio_insert_parameter(mixit_session session, uint32_t input_id,
+                                                                            uint32_t slot, uint32_t index,
+                                                                            mixit_audio_insert_parameter* out_parameter);
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_audio_insert_parameter(mixit_session session, uint32_t input_id,
+                                                                            uint32_t slot, uint32_t parameter_id,
+                                                                            double value);
+
+/* Opaque state blob (component + controller). BUFFER_TOO_SMALL sets
+ * *out_size to the required size; capacity 0 queries it. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_audio_insert_state(mixit_session session, uint32_t input_id,
+                                                                        uint32_t slot, uint8_t* buffer,
+                                                                        uint32_t capacity, uint32_t* out_size);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

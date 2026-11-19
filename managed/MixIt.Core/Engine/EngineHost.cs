@@ -134,6 +134,19 @@ public sealed class EngineHost : IDisposable
         }
     }
 
+    /// <summary>VST3 effects in a bundle/folder, or the default folders when null (EXPERIMENTAL). Slow: not on the UI thread.</summary>
+    public IReadOnlyList<Vst3Plugin> ScanVst3(string? path = null)
+    {
+        try
+        {
+            return RequireEngine().ScanVst3(path);
+        }
+        catch (MixItNativeException ex) when (ex.Result == NativeResult.NotSupported)
+        {
+            return [];
+        }
+    }
+
     /// <summary>Connected video capture devices (EXPERIMENTAL). Empty where capture is unsupported.</summary>
     public IReadOnlyList<CaptureDevice> EnumerateCaptureDevices()
     {

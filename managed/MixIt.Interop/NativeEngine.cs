@@ -239,6 +239,48 @@ public sealed unsafe class NativeEngine : IDisposable
         return list;
     }
 
+    /// <summary>
+    /// Scans a .vst3 bundle or folder, or the platform's default plug-in folders when
+    /// <paramref name="path"/> is null. Loads every plug-in binary: slow, call off the UI thread.
+    /// </summary>
+    public IReadOnlyList<Vst3Plugin> ScanVst3(string? path = null)
+    {
+        byte* p = path is null ? null : (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(path);
+        try
+        {
+            var raw = new MixitVst3PluginInfo[64];
+            while (true)
+            {
+                for (int i = 0; i < raw.Length; i++) raw[i].StructSize = (uint)sizeof(MixitVst3PluginInfo);
+                uint count = 0;
+                NativeResult r;
+                fixed (MixitVst3PluginInfo* a = raw)
+                {
+                    r = NativeMethods.mixit_scan_vst3(_handle, p, a, (uint)raw.Length, &count);
+                }
+                if (r == NativeResult.BufferTooSmall && count > raw.Length)
+                {
+                    raw = new MixitVst3PluginInfo[count];
+                    continue;
+                }
+                Check(r, "mixit_scan_vst3");
+                var list = new List<Vst3Plugin>((int)count);
+                for (int i = 0; i < count; i++)
+                {
+                    MixitVst3PluginInfo v = raw[i];
+                    list.Add(new Vst3Plugin(Utf8.FromNullTerminated(v.Path, 512), Utf8.FromNullTerminated(v.ClassId, 40),
+                        Utf8.FromNullTerminated(v.Name, 128), Utf8.FromNullTerminated(v.Vendor, 128),
+                        Utf8.FromNullTerminated(v.Version, 64), Utf8.FromNullTerminated(v.Subcategories, 128)));
+                }
+                return list;
+            }
+        }
+        finally
+        {
+            if (p != null) System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)p);
+        }
+    }
+
     /// <summary>FFmpeg availability, versions and licence verdict for this engine build.</summary>
     public static MediaLibraryInfo GetMediaLibraryInfo()
     {
