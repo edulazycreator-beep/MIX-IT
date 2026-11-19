@@ -136,4 +136,29 @@ public class ProductionServiceTests
             if (!OperatingSystem.IsWindows()) Assert.Empty(devices);
         }
     }
+
+    [Fact]
+    public void AudioSettingsSurviveAFormatChange()
+    {
+        (EngineHost host, ProductionService service) = Create();
+        using (host)
+        using (service)
+        {
+            ProductionInput a = service.AddTestSignal();
+            AudioStripSettings strip = service.GetAudioStrip(a.Id) with { FaderDb = -12f, Mute = true, BusMask = 0b11 };
+            service.SetAudioStrip(a.Id, strip);
+            service.SetAudioBus(AudioBus.AuxA, new AudioBusSettings { FaderDb = -4f });
+            service.SetMonitorSource(AudioBus.AuxA);
+
+            service.SetFormat(ProductionFormat.Standard.First(f => f.Width == 1280));  // rebuilds the session
+            uint id = service.Inputs[0].Id;
+            AudioStripSettings back = service.GetAudioStrip(id);
+            Assert.Equal(-12f, back.FaderDb);
+            Assert.True(back.Mute);
+            Assert.True(back.SendsTo(AudioBus.AuxA));
+            Assert.Equal(-4f, service.GetAudioBus(AudioBus.AuxA).FaderDb);
+            Assert.Equal(AudioBus.AuxA, service.MonitorSource);
+            Assert.Null(service.GetInputMeter(999));
+        }
+    }
 }

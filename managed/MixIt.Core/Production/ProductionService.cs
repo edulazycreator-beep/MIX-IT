@@ -59,6 +59,8 @@ public sealed class ProductionService : IDisposable
     private ProductionFormat _format = ProductionFormat.Standard[0];
     private CompositorPreference _compositor = CompositorPreference.Auto;
     private uint? _pipInputId;
+    private readonly Dictionary<AudioBus, AudioBusSettings> _buses = [];
+    private AudioBus _monitorSource = AudioBus.Master;
     private int _nextTestNumber = 1;
     private bool _starting;
 
@@ -208,6 +210,66 @@ public sealed class ProductionService : IDisposable
 
     public SessionStatistics? GetStatistics() => _session?.GetStatistics();
 
+    // ---- audio ------------------------------------------------------------------
+
+    public AudioStripSettings GetAudioStrip(uint inputId) => RequireSession().GetAudioStrip(inputId);
+
+    /// <summary>Applies a strip now (also while running) and keeps it for session rebuilds.</summary>
+    public void SetAudioStrip(uint inputId, AudioStripSettings strip)
+    {
+        ArgumentNullException.ThrowIfNull(strip);
+        int index = _inputs.FindIndex(i => i.Id == inputId);
+        if (index < 0) throw new ArgumentException($"No input {inputId}.", nameof(inputId));
+        RequireSession().SetAudioStrip(inputId, strip);
+        _specs[index].Strip = strip;
+    }
+
+    public AudioBusSettings GetAudioBus(AudioBus bus) => RequireSession().GetAudioBus(bus);
+
+    public void SetAudioBus(AudioBus bus, AudioBusSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        RequireSession().SetAudioBus(bus, settings);
+        _buses[bus] = settings;
+    }
+
+    public AudioBus MonitorSource => _monitorSource;
+
+    public void SetMonitorSource(AudioBus bus)
+    {
+        RequireSession().SetMonitorSource(bus);
+        _monitorSource = bus;
+    }
+
+    /// <summary>Meters, or null when no session exists (engine stopped).</summary>
+    public AudioMeterReading? GetInputMeter(uint inputId)
+    {
+        if (_session is null) return null;
+        try
+        {
+            return _session.GetInputMeter(inputId);
+        }
+        catch (MixItNativeException ex) when (ex.Result is NativeResult.NotFound or NativeResult.InvalidHandle)
+        {
+            return null;
+        }
+    }
+
+    public AudioMeterReading? GetBusMeter(AudioBus bus)
+    {
+        if (_session is null) return null;
+        try
+        {
+            return _session.GetBusMeter(bus);
+        }
+        catch (MixItNativeException ex) when (ex.Result == NativeResult.InvalidHandle)
+        {
+            return null;
+        }
+    }
+
+    public void ResetLoudness(AudioBus bus) => RequireSession().ResetLoudness(bus);
+
     /// <summary>
     /// Copies the newest frame of a bus (BGRA8) into caller memory, e.g. a
     /// WriteableBitmap back buffer. Null when no frame is available.
@@ -254,7 +316,7 @@ public sealed class ProductionService : IDisposable
         ProductionInputKind.TestSignal => session.AddTestSource(new TestSourceOptions
         {
             Width = _format.Width, Height = _format.Height, FrameRate = _format.FrameRate,
-            ToneHz = 0, FlashIntervalFrames = 0,
+            ToneHz = 1000, FlashIntervalFrames = 0,  // colour bars with a -20 dBFS line-up tone
         }),
         ProductionInputKind.CaptureDevice => session.AddCaptureSource(spec.Path!),
         _ => session.AddFileSource(spec.Path!, spec.Loop),
@@ -284,7 +346,10 @@ public sealed class ProductionService : IDisposable
             {
                 uint id = AddToSession(session, _specs[i]);
                 _inputs[i] = _inputs[i] with { Id = id, Detail = Describe(_specs[i]) };
+                if (_specs[i].Strip is { } strip) session.SetAudioStrip(id, strip);
             }
+            foreach ((AudioBus bus, AudioBusSettings settings) in _buses) session.SetAudioBus(bus, settings);
+            session.SetMonitorSource(_monitorSource);
         }
         catch
         {
@@ -311,5 +376,9 @@ public sealed class ProductionService : IDisposable
     private void RaiseChanged() => Changed?.Invoke(this, EventArgs.Empty);
 
     /// <param name="Path">File path, or the device id for capture devices.</param>
-    private sealed record InputSpec(ProductionInputKind Kind, string Name, string? Path, bool Loop);
+    private sealed record InputSpec(ProductionInputKind Kind, string Name, string? Path, bool Loop)
+    {
+        /// <summary>Operator's strip settings (null = engine defaults); reapplied after a rebuild.</summary>
+        public AudioStripSettings? Strip { get; set; }
+    }
 }

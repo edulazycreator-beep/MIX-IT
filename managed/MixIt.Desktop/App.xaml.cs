@@ -33,6 +33,7 @@ public partial class App : Application
         services.AddSingleton<EngineHost>();
         services.AddSingleton<ProductionService>();
         services.AddSingleton<ProductionViewModel>();
+        services.AddSingleton<AudioMixerViewModel>();
         services.AddSingleton<DiagnosticsViewModel>();
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<MainWindow>();
@@ -62,7 +63,7 @@ public partial class App : Application
         if (e.Args.Length == 2 && e.Args[0] == "--self-test" && e.Args[1] == "production")
         {
             _ = SelfTest.RunProductionAsync(init, _services.GetRequiredService<ProductionViewModel>(),
-                _services.GetRequiredService<ProductionService>(), _services.GetRequiredService<ILogger<App>>(), this);
+                _services.GetRequiredService<AudioMixerViewModel>(), _services.GetRequiredService<ProductionService>(), _services.GetRequiredService<ILogger<App>>(), this);
         }
     }
 

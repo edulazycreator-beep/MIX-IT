@@ -16,16 +16,18 @@ public sealed class MainViewModel : ObservableObject
     private string _engineStatus = "Engine stopped";
     private bool _engineHealthy;
 
-    public MainViewModel(EngineHost host, DiagnosticsViewModel diagnostics, ProductionViewModel production)
+    public MainViewModel(EngineHost host, DiagnosticsViewModel diagnostics, ProductionViewModel production,
+        AudioMixerViewModel audioMixer)
     {
         _host = host;
         Diagnostics = diagnostics;
         Production = production;
+        AudioMixer = audioMixer;
         Sections =
         [
             new("Production Studio", "Available — video only (M3)", true),
             new("Input Manager", "Planned — inputs are added in Production Studio", false),
-            new("Audio Mixer", "Planned — Milestone 4", false),
+            new("Audio Mixer", "Available — mixer, EQ, dynamics, meters (M4)", true),
             new("Streaming", "Planned — Milestone 5", false),
             new("Recording", "Planned — Milestone 5", false),
             new("Graphics Studio", "Planned — Milestone 6", false),
@@ -47,6 +49,8 @@ public sealed class MainViewModel : ObservableObject
 
     public ProductionViewModel Production { get; }
 
+    public AudioMixerViewModel AudioMixer { get; }
+
     public SectionItem SelectedSection
     {
         get => _selectedSection;
@@ -55,8 +59,10 @@ public sealed class MainViewModel : ObservableObject
             if (!SetProperty(ref _selectedSection, value)) return;
             OnPropertyChanged(nameof(ShowDiagnostics));
             OnPropertyChanged(nameof(ShowProduction));
+            OnPropertyChanged(nameof(ShowAudioMixer));
             OnPropertyChanged(nameof(ShowPlaceholder));
-            Production.IsActive = ShowProduction;  // monitors poll only while visible
+            Production.IsActive = ShowProduction;  // monitors and meters poll only while visible
+            AudioMixer.IsActive = ShowAudioMixer;
         }
     }
 
@@ -64,7 +70,9 @@ public sealed class MainViewModel : ObservableObject
 
     public bool ShowProduction => SelectedSection.Title == "Production Studio";
 
-    public bool ShowPlaceholder => !ShowDiagnostics && !ShowProduction;
+    public bool ShowAudioMixer => SelectedSection.Title == "Audio Mixer";
+
+    public bool ShowPlaceholder => !ShowDiagnostics && !ShowProduction && !ShowAudioMixer;
 
     public string EngineStatus
     {

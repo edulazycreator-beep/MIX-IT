@@ -79,6 +79,9 @@
             <views:ProductionView DataContext="{Binding Production}"
                                   Visibility="{Binding DataContext.ShowProduction, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
 
+            <views:AudioMixerView DataContext="{Binding AudioMixer}"
+                                  Visibility="{Binding DataContext.ShowAudioMixer, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
+
             <ContentControl Content="{Binding Diagnostics}"
                             Visibility="{Binding ShowDiagnostics, Converter={StaticResource BoolToVisibility}}">
                 <ContentControl.ContentTemplate>

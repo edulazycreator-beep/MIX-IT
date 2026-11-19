@@ -9,13 +9,13 @@ namespace MixIt.Desktop;
 /// <summary>
 /// "MixIt.exe --self-test production": drives the Production Studio view
 /// model exactly as the buttons do (inputs, start, monitors, CUT, AUTO, PiP,
-/// stop), checks the result against the engine statistics, writes one
+/// audio meters and a fader, stop), checks the result against the engine statistics, writes one
 /// "Self-test production: PASS|FAIL ..." line to the log and exits with 0 or 1.
 /// </summary>
 internal static class SelfTest
 {
-    public static async Task RunProductionAsync(Task engineStart, ProductionViewModel vm, ProductionService production,
-        ILogger logger, Application app)
+    public static async Task RunProductionAsync(Task engineStart, ProductionViewModel vm, AudioMixerViewModel mixer,
+        ProductionService production, ILogger logger, Application app)
     {
         var failures = new List<string>();
         try
@@ -49,6 +49,22 @@ internal static class SelfTest
             if (s.CompositedFrames == 0) failures.Add("nothing was composited (PiP / transition)");
             if (!vm.Inputs[0].OnProgram || !vm.Inputs[1].OnPreview) failures.Add("tally does not match the buses");
             if (vm.Error is not null) failures.Add($"operator error shown: {vm.Error}");
+
+            // Audio: the program input's line-up tone (-20 dBFS) reaches master;
+            // a fader move in the mixer reaches the engine.
+            mixer.IsActive = true;
+            await Task.Delay(400);
+            BusViewModel master = mixer.Buses[0];
+            // Input 1 on program plus input 2 as PiP: one or two -20 dBFS tones (-20..-14 dBFS).
+            if (master.PeakLeft < -26 || master.PeakLeft > -8) failures.Add($"master meter shows {master.PeakLeft:0.0} dBFS, expected -20..-14");
+            if (mixer.Strips.Count != 2) failures.Add($"mixer shows {mixer.Strips.Count} strips, expected 2");
+            else
+            {
+                mixer.Strips[0].FaderDb = -10;
+                if (production.GetAudioStrip(mixer.Strips[0].Id).FaderDb != -10f) failures.Add("fader move did not reach the engine");
+            }
+            if (mixer.Error is not null) failures.Add($"mixer error shown: {mixer.Error}");
+            mixer.IsActive = false;
 
             await vm.ToggleProductionAsync();
             if (vm.IsRunning) failures.Add("production did not stop");
