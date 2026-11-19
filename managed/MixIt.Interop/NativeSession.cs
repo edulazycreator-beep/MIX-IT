@@ -89,7 +89,11 @@ public readonly record struct SessionStatistics(
     CompositorKind Compositor,
     ulong TransitionsCompleted,
     ulong CompositedFrames,
-    ulong CompositorFallbacks);
+    ulong CompositorFallbacks,
+    ulong AudioBlocks,
+    ulong AudioLateBlocks,
+    ulong AudioSkippedBlocks,
+    TimeSpan AudioMaxLateness);
 
 /// <summary>Video bus (mirrors MIXIT_BUS_*).</summary>
 public enum VideoBus
@@ -155,7 +159,9 @@ public readonly record struct InputStatistics(
     long AvOffsetLastNanoseconds,
     long AvOffsetMaxAbsNanoseconds,
     ulong DecodeErrors,
-    ulong Loops);
+    ulong Loops,
+    ulong AudioUnderrunFrames,
+    ulong AudioLateBlocks);
 
 /// <summary>Description of a copied program frame (BGRA8).</summary>
 public readonly record struct ProgramFrameInfo(
@@ -303,6 +309,96 @@ public sealed unsafe class NativeSession : IDisposable
     /// <summary>Removes overlay layer <paramref name="index"/> of a bus.</summary>
     public void ClearLayer(VideoBus bus, uint index) => SetLayer(bus, index, new LayerSettings { InputId = 0 });
 
+    // ---- audio mixer (API 0.4) ----------------------------------------------
+
+    /// <summary>Channel strip of an input (applied from the next 10 ms block).</summary>
+    public void SetAudioStrip(uint inputId, AudioStripSettings strip)
+    {
+        ArgumentNullException.ThrowIfNull(strip);
+        MixitAudioStrip c = AudioConvert.ToNative(strip);
+        Check(NativeMethods.mixit_session_set_audio_strip(_handle, inputId, &c), "mixit_session_set_audio_strip");
+    }
+
+    public AudioStripSettings GetAudioStrip(uint inputId)
+    {
+        MixitAudioStrip c = default;
+        c.StructSize = (uint)sizeof(MixitAudioStrip);
+        Check(NativeMethods.mixit_session_get_audio_strip(_handle, inputId, &c), "mixit_session_get_audio_strip");
+        return AudioConvert.FromNative(c);
+    }
+
+    /// <summary>Master (0) or aux A..D (1..4) bus settings.</summary>
+    public void SetAudioBus(AudioBus bus, AudioBusSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var c = new MixitAudioBusConfig
+        {
+            StructSize = (uint)sizeof(MixitAudioBusConfig),
+            Flags = (settings.Mute ? 1u : 0u) | (settings.Limiter ? 2u : 0u),
+            FaderDb = settings.FaderDb,
+            LimiterCeilingDb = settings.LimiterCeilingDb,
+            LimiterReleaseMs = settings.LimiterReleaseMs,
+        };
+        Check(NativeMethods.mixit_session_set_audio_bus(_handle, (uint)bus, &c), "mixit_session_set_audio_bus");
+    }
+
+    public AudioBusSettings GetAudioBus(AudioBus bus)
+    {
+        MixitAudioBusConfig c = default;
+        c.StructSize = (uint)sizeof(MixitAudioBusConfig);
+        Check(NativeMethods.mixit_session_get_audio_bus(_handle, (uint)bus, &c), "mixit_session_get_audio_bus");
+        return new AudioBusSettings
+        {
+            FaderDb = c.FaderDb,
+            Mute = (c.Flags & 1) != 0,
+            Limiter = (c.Flags & 2) != 0,
+            LimiterCeilingDb = c.LimiterCeilingDb,
+            LimiterReleaseMs = c.LimiterReleaseMs,
+        };
+    }
+
+    /// <summary>Bus the monitor plays when nothing is soloed.</summary>
+    public void SetMonitorSource(AudioBus bus) =>
+        Check(NativeMethods.mixit_session_set_monitor_source(_handle, (uint)bus), "mixit_session_set_monitor_source");
+
+    public AudioMeterReading GetInputMeter(uint inputId)
+    {
+        MixitAudioMeter m = default;
+        m.StructSize = (uint)sizeof(MixitAudioMeter);
+        Check(NativeMethods.mixit_session_get_input_meter(_handle, inputId, &m), "mixit_session_get_input_meter");
+        return AudioConvert.FromNative(m);
+    }
+
+    public AudioMeterReading GetBusMeter(AudioBus bus)
+    {
+        MixitAudioMeter m = default;
+        m.StructSize = (uint)sizeof(MixitAudioMeter);
+        Check(NativeMethods.mixit_session_get_bus_meter(_handle, (uint)bus, &m), "mixit_session_get_bus_meter");
+        return AudioConvert.FromNative(m);
+    }
+
+    public void ResetLoudness(AudioBus bus) =>
+        Check(NativeMethods.mixit_session_reset_loudness(_handle, (uint)bus), "mixit_session_reset_loudness");
+
+    /// <summary>
+    /// Pops mixed audio of a bus (interleaved float, session channels) into
+    /// <paramref name="destination"/>; null if nothing is waiting.
+    /// </summary>
+    public AudioBlockInfo? TryReadBusAudio(AudioBus bus, Span<float> destination, int channels)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(channels, 1);
+        MixitAudioBlockInfo info = default;
+        info.StructSize = (uint)sizeof(MixitAudioBlockInfo);
+        NativeResult r;
+        fixed (float* p = destination)
+        {
+            r = NativeMethods.mixit_session_read_bus_audio(_handle, (uint)bus, p, (uint)(destination.Length / channels), &info);
+        }
+        if (r == NativeResult.NotFound) return null;
+        Check(r, "mixit_session_read_bus_audio");
+        return new AudioBlockInfo((int)info.Frames, TimeSpan.FromTicks(info.PtsNs / 100), info.FirstSample);
+    }
+
     /// <summary>Starts production (idempotent).</summary>
     public void Start() => Check(NativeMethods.mixit_session_start(_handle), "mixit_session_start");
 
@@ -319,7 +415,8 @@ public sealed unsafe class NativeSession : IDisposable
             s.SkippedTicks, FromNs(s.MaxTickLatenessNs), s.ProgramFrames, s.ProgramBlackFrames, s.ProgramFramesDropped,
             s.ProgramPoolExhausted, FromNs(s.VideoLatencyLastNs), FromNs(s.VideoLatencyMaxNs), s.PreviewInputId,
             s.TransitionActive < 0 ? null : (TransitionKind)s.TransitionActive, s.TransitionProgress,
-            (CompositorKind)s.Compositor, s.TransitionsCompleted, s.CompositedFrames, s.CompositorFallbacks);
+            (CompositorKind)s.Compositor, s.TransitionsCompleted, s.CompositedFrames, s.CompositorFallbacks,
+            s.AudioBlocks, s.AudioLateBlocks, s.AudioSkippedBlocks, FromNs(s.AudioMaxLatenessNs));
     }
 
     /// <summary>Counters of one input.</summary>
@@ -331,7 +428,7 @@ public sealed unsafe class NativeSession : IDisposable
         return new InputStatistics(s.InputId, s.FramesProduced, s.FramesDropped, s.FramesPoolExhausted,
             s.FramesPresented, s.FramesRepeated, s.FramesSkipped, s.ProducerLateSkips, s.AudioBlocksProduced,
             s.AudioBlocksDropped, s.AudioBlocksConsumed, s.AvSyncEvents, s.AvOffsetLastNs, s.AvOffsetMaxAbsNs,
-            s.DecodeErrors, s.Loops);
+            s.DecodeErrors, s.Loops, s.AudioUnderrunFrames, s.AudioLateBlocks);
     }
 
     /// <summary>

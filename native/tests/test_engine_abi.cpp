@@ -45,8 +45,8 @@ TEST(EngineAbi, VersionAndBuildInfo) {
     const uint32_t v = mixit_get_api_version();
     EXPECT_EQ(v, MIXIT_API_VERSION);
     EXPECT_EQ(MIXIT_VERSION_MAJOR(v), 0u);
-    EXPECT_EQ(MIXIT_VERSION_MINOR(v), 3u);
-    EXPECT_NE(std::string(mixit_get_build_info()).find("MIX IT native engine 0.3.0"), std::string::npos);
+    EXPECT_EQ(MIXIT_VERSION_MINOR(v), 4u);
+    EXPECT_NE(std::string(mixit_get_build_info()).find("MIX IT native engine 0.4.0"), std::string::npos);
 }
 
 TEST(EngineAbi, ResultNames) {
@@ -84,9 +84,9 @@ TEST(EngineAbi, CreateRejectsIncompatibleApiVersion) {
     mixit_engine e = nullptr;
     c.api_version = MIXIT_MAKE_VERSION(1, 0, 0);
     EXPECT_EQ(mixit_engine_create(&c, &e), MIXIT_E_VERSION_MISMATCH);
-    c.api_version = MIXIT_MAKE_VERSION(0, 2, 0);
+    c.api_version = MIXIT_MAKE_VERSION(0, MIXIT_API_VERSION_MINOR - 1, 0);
     EXPECT_EQ(mixit_engine_create(&c, &e), MIXIT_E_VERSION_MISMATCH) << "0.x requires an exact minor match";
-    c.api_version = MIXIT_MAKE_VERSION(0, 3, 7);
+    c.api_version = MIXIT_MAKE_VERSION(0, MIXIT_API_VERSION_MINOR, 7);
     EXPECT_EQ(mixit_engine_create(&c, &e), MIXIT_OK) << "patch differences are compatible";
     EXPECT_EQ(mixit_engine_destroy(e), MIXIT_OK);
 }

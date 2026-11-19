@@ -30,6 +30,10 @@ public class InteropLayoutTests
         Assert.Equal(NativeStructSizes.LayerConfig, Unsafe.SizeOf<MixitLayerConfig>());
         Assert.Equal(NativeStructSizes.CaptureDeviceInfo, Unsafe.SizeOf<MixitCaptureDeviceInfo>());
         Assert.Equal(NativeStructSizes.CaptureSourceConfig, Unsafe.SizeOf<MixitCaptureSourceConfig>());
+        Assert.Equal(NativeStructSizes.AudioStrip, Unsafe.SizeOf<MixitAudioStrip>());
+        Assert.Equal(NativeStructSizes.AudioBusConfig, Unsafe.SizeOf<MixitAudioBusConfig>());
+        Assert.Equal(NativeStructSizes.AudioMeter, Unsafe.SizeOf<MixitAudioMeter>());
+        Assert.Equal(NativeStructSizes.AudioBlockInfo, Unsafe.SizeOf<MixitAudioBlockInfo>());
     }
 
     [Fact]
@@ -51,6 +55,11 @@ public class InteropLayoutTests
         Assert.Equal(40, (int)Marshal.OffsetOf<MixitLayerConfig>(nameof(MixitLayerConfig.Opacity)));
         Assert.Equal(32, (int)Marshal.OffsetOf<MixitSessionConfig>(nameof(MixitSessionConfig.Compositor)));
         Assert.Equal(128, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.CompositorFallbacks)));
+        Assert.Equal(136, (int)Marshal.OffsetOf<MixitSessionStats>(nameof(MixitSessionStats.AudioBlocks)));
+        Assert.Equal(128, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.AudioUnderrunFrames)));
+        Assert.Equal(32, (int)Marshal.OffsetOf<MixitAudioStrip>(nameof(MixitAudioStrip.Eq0)));
+        Assert.Equal(112, (int)Marshal.OffsetOf<MixitAudioStrip>(nameof(MixitAudioStrip.GateThresholdDb)));
+        Assert.Equal(80, (int)Marshal.OffsetOf<MixitAudioMeter>(nameof(MixitAudioMeter.GainReductionDb)));
         Assert.Equal(8, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.FramesProduced)));
         Assert.Equal(104, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.AvOffsetMaxAbsNs)));
         Assert.Equal(112, (int)Marshal.OffsetOf<MixitInputStats>(nameof(MixitInputStats.DecodeErrors)));

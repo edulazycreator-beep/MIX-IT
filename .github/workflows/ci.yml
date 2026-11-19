@@ -35,10 +35,15 @@ jobs:
       - name: Build and test
         shell: pwsh
         run: ./scripts/build-windows.ps1 -Configuration Debug
-      - name: Package (Release, self-contained) and smoke-test MixIt.exe
+      # The Release build and its smoke/self-tests run on every push; the
+      # downloadable package is published only once the product reaches M9
+      # (owner decision 2026-11-19). Enable with the repository variable
+      # MIXIT_PUBLISH_PACKAGE=true.
+      - name: Release build (self-contained) and smoke/self-test MixIt.exe
         shell: pwsh
         run: ./scripts/package-windows.ps1 -Output artifacts/MixIt-win-x64
-      - name: Upload MixIt-win-x64
+      - name: Upload MixIt-win-x64 (M9 only)
+        if: ${{ vars.MIXIT_PUBLISH_PACKAGE == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: MixIt-win-x64-${{ github.sha }}

@@ -10,6 +10,7 @@ set(MIXIT_CORE_SOURCES
     src/abi/engine_abi.cpp
     src/abi/media_library_abi.cpp
     src/abi/session_abi.cpp
+    src/abi/audio_abi.cpp
     src/core/engine.cpp
     src/core/last_error.cpp
     src/logging/json.cpp
@@ -20,6 +21,9 @@ set(MIXIT_CORE_SOURCES
     src/media/ffmpeg_library.cpp
     src/media/file_source.cpp
     src/media/session.cpp
+    src/media/session_audio.cpp
+    src/audio/dsp.cpp
+    src/audio/channel_strip.cpp
     src/media/test_signal.cpp
     src/media/test_signal_source.cpp
     src/media/time_base.cpp

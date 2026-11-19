@@ -122,6 +122,86 @@ internal struct MixitSessionStats
     public ulong TransitionsCompleted;   // API 0.3
     public ulong CompositedFrames;       // API 0.3
     public ulong CompositorFallbacks;    // API 0.3
+    public ulong AudioBlocks;            // API 0.4
+    public ulong AudioLateBlocks;        // API 0.4
+    public ulong AudioSkippedBlocks;     // API 0.4
+    public long AudioMaxLatenessNs;      // API 0.4
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixitEqBand
+{
+    public int Enabled;
+    public int Type;
+    public float FrequencyHz;
+    public float GainDb;
+    public float Q;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixitAudioStrip
+{
+    public uint StructSize;
+    public uint Flags;
+    public float TrimDb;
+    public float FaderDb;
+    public float Balance;
+    public float DelayMs;
+    public uint BusMask;
+    public float HighPassHz;
+    public MixitEqBand Eq0;
+    public MixitEqBand Eq1;
+    public MixitEqBand Eq2;
+    public MixitEqBand Eq3;
+    public float GateThresholdDb;
+    public float GateRatio;
+    public float GateRangeDb;
+    public float GateAttackMs;
+    public float GateHoldMs;
+    public float GateReleaseMs;
+    public float CompThresholdDb;
+    public float CompRatio;
+    public float CompKneeDb;
+    public float CompAttackMs;
+    public float CompReleaseMs;
+    public float CompMakeupDb;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixitAudioBusConfig
+{
+    public uint StructSize;
+    public uint Flags;
+    public float FaderDb;
+    public float LimiterCeilingDb;
+    public float LimiterReleaseMs;
+    public uint Reserved;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitAudioMeter
+{
+    public uint StructSize;
+    public uint Id;
+    public uint Channels;
+    public uint Flags;
+    public fixed float PeakDb[8];
+    public fixed float RmsDb[8];
+    public float GainReductionDb;
+    public float GateReductionDb;
+    public float AppliedGainDb;
+    public float MomentaryLufs;
+    public float ShortTermLufs;
+    public float IntegratedLufs;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixitAudioBlockInfo
+{
+    public uint StructSize;
+    public uint Frames;
+    public long PtsNs;
+    public long FirstSample;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -161,6 +241,8 @@ internal struct MixitInputStats
     public long AvOffsetMaxAbsNs;
     public ulong DecodeErrors;   // API 0.3
     public ulong Loops;          // API 0.3
+    public ulong AudioUnderrunFrames;  // API 0.4
+    public ulong AudioLateBlocks;      // API 0.4
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -238,11 +320,15 @@ internal static class NativeStructSizes
     public const int GpuAdapterInfo = 160;
     public const int SessionConfig = 40;
     public const int TestSourceConfig = 32;
-    public const int SessionStats = 136;
+    public const int SessionStats = 168;
+    public const int AudioStrip = 160;
+    public const int AudioBusConfig = 24;
+    public const int AudioMeter = 104;
+    public const int AudioBlockInfo = 24;
     public const int LayerConfig = 48;
     public const int CaptureDeviceInfo = 648;
     public const int CaptureSourceConfig = 32;
-    public const int InputStats = 128;
+    public const int InputStats = 144;
     public const int FileSourceConfig = 16;
     public const int VideoFrameInfo = 56;
     public const int MediaLibraryInfo = 152;

@@ -1,4 +1,5 @@
 #include "media/session.hpp"
+#include "media/session_internal.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -12,18 +13,8 @@
 #include "util/clock.hpp"
 
 namespace mixit::media {
+using namespace internal;
 namespace {
-
-constexpr std::uint32_t kInputVideoQueue = 4;
-// queue + pending + current + program queue (2) + reader cache + margin
-constexpr std::uint32_t kInputVideoPool = kInputVideoQueue + 8;
-constexpr std::uint32_t kInputAudioQueue = 32;  // 320 ms of 10 ms blocks
-// queue + file read-ahead (24) + margin
-constexpr std::uint32_t kInputAudioPool = kInputAudioQueue + 32;
-// program out (2) + reader cache (1) + preview out (2) + cache (1) + black (1) + in flight (1) + margin
-constexpr std::uint32_t kDefaultProgramPool = 10;
-constexpr std::int64_t kAvMatchWindowNs = 100'000'000;
-constexpr std::int64_t kFlashExpiryNs = 500'000'000;
 
 bool valid_dimensions(std::uint32_t w, std::uint32_t h, std::uint32_t min) {
     return w >= min && h >= min && w <= 8192 && h <= 8192 && w % 2 == 0 && h % 2 == 0;
@@ -31,12 +22,6 @@ bool valid_dimensions(std::uint32_t w, std::uint32_t h, std::uint32_t min) {
 
 std::string rate_text(Rate r) {
     return r.den == 1 ? std::to_string(r.num) : std::to_string(r.num) + "/" + std::to_string(r.den);
-}
-
-void atomic_max(std::atomic<std::int64_t>& target, std::int64_t value) noexcept {
-    std::int64_t cur = target.load(std::memory_order_relaxed);
-    while (value > cur && !target.compare_exchange_weak(cur, value, std::memory_order_relaxed)) {
-    }
 }
 
 // Recognises the test signal's flash band from pixels, so A/V alignment can
@@ -58,48 +43,6 @@ bool looks_like_flash(const VideoFrame& f) noexcept {
 }  // namespace
 
 // ---------------------------------------------------------------------------
-
-struct Session::Input {
-    std::uint32_t id = 0;
-    std::unique_ptr<MediaSource> source;
-
-    // Pools first: destroyed last (queues and refs below hold their items).
-    VideoFramePool video_pool;
-    AudioBlockPool audio_pool;
-    MediaQueue<VideoRef> video_queue{kInputVideoQueue, OverflowPolicy::DropOldest};
-    MediaQueue<AudioRef> audio_queue{kInputAudioQueue, OverflowPolicy::DropNewest};
-
-    std::thread producer;
-    SourceCounters counters;  // written by the source thread
-
-    // Output-thread state (only touched by the output thread while running).
-    VideoRef pending;
-    VideoRef current;
-    bool current_presented = false;
-    bool click_active = false;
-    bool flash_valid = false;
-    std::int64_t flash_pts = 0;
-    std::atomic<std::uint64_t> frames_presented{0}, frames_repeated{0}, frames_skipped{0};
-    std::atomic<std::uint64_t> audio_blocks_consumed{0}, av_sync_events{0};
-    std::atomic<std::int64_t> av_offset_last_ns{0}, av_offset_max_abs_ns{0};
-
-    Input(std::uint32_t input_id, std::unique_ptr<MediaSource> src, const SessionConfig& session)
-        : id(input_id),
-          source(std::move(src)),
-          video_pool(std::max<std::uint32_t>(2, source->format().width), std::max<std::uint32_t>(2, source->format().height),
-                     kInputVideoPool),
-          audio_pool(session.channels, session.sample_rate / 100, session.sample_rate, kInputAudioPool) {}
-
-    void reset_runtime_state() noexcept {
-        pending.reset();
-        current.reset();
-        current_presented = false;
-        click_active = false;
-        flash_valid = false;
-        video_queue.clear();
-        audio_queue.clear();
-    }
-};
 
 // ---------------------------------------------------------------------------
 
@@ -138,6 +81,7 @@ Status Session::create(const SessionConfig& config, Logger& logger, std::unique_
     s->compositor_kind_.store(static_cast<std::int32_t>(s->compositor_->kind()), std::memory_order_relaxed);
     // Latency of frame sync: one output period plus 2 ms scheduling margin.
     s->latency_ns_ = duration_of_index(0, config.frame_rate) + 2'000'000;
+    s->init_audio();
     logger.logf(MIXIT_LOG_INFO, "session", "session created: {}x{} @ {} fps, {} Hz x{} ch", config.width,
                 config.height, rate_text(config.frame_rate), config.sample_rate, config.channels);
     out = std::move(s);
@@ -216,6 +160,7 @@ Status Session::remove_input(std::uint32_t input_id) {
     // Release any bus frames that may reference this input's pool.
     program_out_.clear();
     preview_out_.clear();
+    reset_audio_runtime();
     {
         std::lock_guard consumer(consumer_mutex_);
         program_cache_ = ProgramFrame{};
@@ -345,7 +290,9 @@ Status Session::start() {
             Input* raw = in.get();
             in->producer = std::thread([this, raw] { producer_loop(*raw); });
         }
+        reset_audio_runtime();
         output_thread_ = std::thread([this] { output_loop(); });
+        audio_thread_ = std::thread([this] { audio_loop(); });
     } catch (const std::system_error& e) {
         stop_threads();
         return {MIXIT_E_PLATFORM, std::string("cannot start session threads: ") + e.what()};
@@ -364,6 +311,7 @@ Status Session::start() {
 void Session::stop_threads() noexcept {
     stop_requested_.store(true, std::memory_order_release);
     if (output_thread_.joinable()) output_thread_.join();
+    if (audio_thread_.joinable()) audio_thread_.join();
     for (auto& in : inputs_) {
         if (in->producer.joinable()) in->producer.join();
     }
@@ -434,31 +382,6 @@ void Session::sync_input(Input& in, std::int64_t target_ns) noexcept {
         in.current_presented = true;
     } else {
         in.frames_repeated.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-void Session::consume_audio(Input& in) noexcept {
-    AudioRef blk;
-    while (in.audio_queue.pop(blk)) {
-        in.audio_blocks_consumed.fetch_add(1, std::memory_order_relaxed);
-        const AudioBlock& b = *blk;
-        const Rate sr{b.sample_rate, 1};
-        for (std::uint32_t i = 0; i < b.frames; ++i) {
-            const bool above = std::abs(b.samples[static_cast<std::size_t>(i) * b.channels]) > kClickThreshold;
-            if (above && !in.click_active) {
-                const std::int64_t click_ns = origin_ns_ + time_of_index(b.first_sample + i, sr);
-                if (in.flash_valid && std::llabs(click_ns - in.flash_pts) <= kAvMatchWindowNs) {
-                    const std::int64_t offset = click_ns - in.flash_pts;
-                    in.av_offset_last_ns.store(offset, std::memory_order_relaxed);
-                    atomic_max(in.av_offset_max_abs_ns, std::llabs(offset));
-                    in.av_sync_events.fetch_add(1, std::memory_order_relaxed);
-                    in.flash_valid = false;
-                }
-            }
-            in.click_active = above;
-        }
-        if (in.flash_valid && b.pts_ns - in.flash_pts > kFlashExpiryNs) in.flash_valid = false;
-        blk.reset();
     }
 }
 
@@ -561,8 +484,11 @@ void Session::output_loop() noexcept {
         if (lateness > period / 2) late_ticks_.fetch_add(1, std::memory_order_relaxed);
         atomic_max(max_tick_lateness_ns_, lateness);
 
-        for (auto& in : inputs_) sync_input(*in, target);
-        for (auto& in : inputs_) consume_audio(*in);
+        for (auto& in : inputs_) {
+            sync_input(*in, target);
+            match_av_events(*in);
+            if (in->flash_valid && target - in->flash_pts > kFlashExpiryNs) in->flash_valid = false;
+        }
 
         // Snapshot scenes and advance a running transition.
         BusScene program_scene;
@@ -589,6 +515,7 @@ void Session::output_loop() noexcept {
 
         ProgramFrame out;
         const float progress = tr.active ? static_cast<float>(tr.elapsed) / static_cast<float>(tr.total) : 0.0f;
+        publish_afv(program_scene, tr.active ? &preview_scene : nullptr, progress);
         render_bus(program_scene, tr.active ? &preview_scene : nullptr, tr.kind, progress, target,
                    static_cast<std::uint64_t>(n), out);
         if (out.info.input_id != 0) {
@@ -642,6 +569,10 @@ SessionStats Session::stats() const {
     s.compositor_fallbacks = compositor_fallbacks_.load(std::memory_order_relaxed);
     s.transitions_completed = transitions_completed_.load();
     s.composited_frames = composited_frames_.load();
+    s.audio_blocks = audio_blocks_.load();
+    s.audio_late_blocks = audio_late_blocks_.load();
+    s.audio_skipped_blocks = audio_skipped_blocks_.load();
+    s.audio_max_lateness_ns = audio_max_lateness_ns_.load();
     s.ticks = ticks_.load();
     s.late_ticks = late_ticks_.load();
     s.skipped_ticks = skipped_ticks_.load();
@@ -675,6 +606,8 @@ Status Session::input_stats(std::uint32_t input_id, InputStats& out) const {
     out.av_sync_events = in->av_sync_events.load();
     out.av_offset_last_ns = in->av_offset_last_ns.load();
     out.av_offset_max_abs_ns = in->av_offset_max_abs_ns.load();
+    out.audio_underrun_frames = in->audio_underrun_frames.load();
+    out.audio_late_blocks = in->audio_late_blocks.load();
     return Status::ok();
 }
 

@@ -67,7 +67,7 @@ extern "C" {
 #define MIXIT_VERSION_PATCH(v) ((v) & 0xFFFu)
 
 #define MIXIT_API_VERSION_MAJOR 0
-#define MIXIT_API_VERSION_MINOR 3
+#define MIXIT_API_VERSION_MINOR 4
 #define MIXIT_API_VERSION_PATCH 0
 #define MIXIT_API_VERSION \
     MIXIT_MAKE_VERSION(MIXIT_API_VERSION_MAJOR, MIXIT_API_VERSION_MINOR, MIXIT_API_VERSION_PATCH)
@@ -368,6 +368,11 @@ typedef struct mixit_session_stats {
     uint64_t transitions_completed;  /* cuts + finished transitions */
     uint64_t composited_frames;      /* bus frames rendered by the compositor (others are zero-copy) */
     uint64_t compositor_fallbacks;   /* GPU failures that moved the session to the CPU compositor */
+    /* API 0.4 — appended */
+    uint64_t audio_blocks;           /* mix blocks processed (10 ms each) */
+    uint64_t audio_late_blocks;      /* mix blocks started more than one block late */
+    uint64_t audio_skipped_blocks;   /* blocks skipped after a stall (silence on every bus) */
+    int64_t  audio_max_lateness_ns;
 } mixit_session_stats;
 
 typedef struct mixit_input_stats {
@@ -389,6 +394,9 @@ typedef struct mixit_input_stats {
     /* API 0.3 — appended; filled only if the caller's struct_size covers them */
     uint64_t decode_errors;          /* file/capture sources */
     uint64_t loops;                  /* file sources: completed loops */
+    /* API 0.4 — appended */
+    uint64_t audio_underrun_frames;  /* mix needed samples the source had not delivered (played as silence) */
+    uint64_t audio_late_blocks;      /* blocks that arrived after their mix time */
 } mixit_input_stats;
 
 typedef struct mixit_video_frame_info {
@@ -591,6 +599,132 @@ MIXIT_API mixit_result MIXIT_CALL mixit_get_media_library_info(mixit_media_libra
  * MIXIT_E_NOT_FOUND: not in the build. MIXIT_E_NOT_SUPPORTED: FFmpeg absent
  * or not usable. */
 MIXIT_API mixit_result MIXIT_CALL mixit_query_codec(const char* name, mixit_codec_info* out_info);
+
+/* ---- Audio mixer (API 0.4) -------------------------------------------------
+ * Every input has a channel strip; audio is mixed in 10 ms blocks on the
+ * session sample timeline (sample 0 = session start, same master clock as
+ * video). Strip flow: trim → high-pass → gate/expander → 4-band EQ →
+ * compressor → fader × mute × audio-follows-video → balance → buses.
+ * Buses: 0 master, 1..4 aux A..D (fader, mute, limiter, meters, loudness);
+ * 5 monitor = soloed strips (after fader) if any strip is soloed, else a copy
+ * of the monitor-source bus. Solo never changes master or aux. */
+#define MIXIT_AUDIO_BUS_MASTER   0
+#define MIXIT_AUDIO_BUS_AUX_A    1
+#define MIXIT_AUDIO_BUS_AUX_B    2
+#define MIXIT_AUDIO_BUS_AUX_C    3
+#define MIXIT_AUDIO_BUS_AUX_D    4
+#define MIXIT_AUDIO_BUS_MONITOR  5
+#define MIXIT_AUDIO_MIX_BUSES    5   /* master + aux; valid bits of bus_mask: 0x1F */
+#define MIXIT_AUDIO_EQ_BANDS     4
+#define MIXIT_AUDIO_MAX_METER_CHANNELS 8
+#define MIXIT_AUDIO_FADER_OFF_DB (-96.0f)  /* at or below: silence */
+
+#define MIXIT_EQ_PEAKING     0
+#define MIXIT_EQ_LOW_SHELF   1
+#define MIXIT_EQ_HIGH_SHELF  2
+#define MIXIT_EQ_HIGH_PASS   3
+#define MIXIT_EQ_LOW_PASS    4
+
+#define MIXIT_STRIP_MUTE               0x1u
+#define MIXIT_STRIP_SOLO               0x2u  /* monitor bus only (AFL) */
+#define MIXIT_STRIP_AUDIO_FOLLOWS_VIDEO 0x4u /* audible while the input is on program (default on) */
+#define MIXIT_STRIP_HIGH_PASS          0x8u
+#define MIXIT_STRIP_GATE               0x10u
+#define MIXIT_STRIP_COMPRESSOR         0x20u
+
+typedef struct mixit_eq_band {
+    int32_t enabled;       /* 0 / 1 */
+    int32_t type;          /* MIXIT_EQ_* */
+    float   frequency_hz;  /* 20..20000 */
+    float   gain_db;       /* -24..+24 (peaking/shelves) */
+    float   q;             /* 0.1..10 */
+} mixit_eq_band;
+
+typedef struct mixit_audio_strip {
+    uint32_t      struct_size;
+    uint32_t      flags;               /* MIXIT_STRIP_* */
+    float         trim_db;             /* -24..+24 */
+    float         fader_db;            /* <= +12; <= MIXIT_AUDIO_FADER_OFF_DB = off */
+    float         balance;             /* -1 left .. +1 right (stereo sessions) */
+    float         delay_ms;            /* 0..1000, lip-sync compensation */
+    uint32_t      bus_mask;            /* bit 0 master, bits 1..4 aux A..D */
+    float         high_pass_hz;        /* 20..1000 */
+    mixit_eq_band eq[MIXIT_AUDIO_EQ_BANDS];
+    float         gate_threshold_db;   /* -100..0 */
+    float         gate_ratio;          /* 0 = gate, 1..20 = downward expander */
+    float         gate_range_db;       /* -100..0 (maximum attenuation) */
+    float         gate_attack_ms;      /* 0..100 */
+    float         gate_hold_ms;        /* 0..2000 */
+    float         gate_release_ms;     /* 1..5000 */
+    float         comp_threshold_db;   /* -60..0 */
+    float         comp_ratio;          /* 1..30 */
+    float         comp_knee_db;        /* 0..24 */
+    float         comp_attack_ms;      /* 0..500 */
+    float         comp_release_ms;     /* 1..5000 */
+    float         comp_makeup_db;      /* 0..24 */
+} mixit_audio_strip;
+
+#define MIXIT_AUDIO_BUS_FLAG_MUTE    0x1u
+#define MIXIT_AUDIO_BUS_FLAG_LIMITER 0x2u  /* brick-wall limiter (master: on by default, -1 dBFS) */
+
+typedef struct mixit_audio_bus_config {
+    uint32_t struct_size;
+    uint32_t flags;                /* MIXIT_AUDIO_BUS_FLAG_* */
+    float    fader_db;             /* <= +12 */
+    float    limiter_ceiling_db;   /* -30..0 */
+    float    limiter_release_ms;   /* 1..5000 */
+    uint32_t reserved;             /* 0 */
+} mixit_audio_bus_config;
+
+typedef struct mixit_audio_meter {
+    uint32_t struct_size;
+    uint32_t id;                   /* input id, or bus index */
+    uint32_t channels;
+    uint32_t flags;                /* bit 0: gate open (strips) */
+    float    peak_db[MIXIT_AUDIO_MAX_METER_CHANNELS];  /* ballistic peak dBFS (-144 = silence) */
+    float    rms_db[MIXIT_AUDIO_MAX_METER_CHANNELS];   /* 300 ms RMS dBFS */
+    float    gain_reduction_db;    /* strips: compressor; buses: limiter (<= 0) */
+    float    gate_reduction_db;    /* strips only (<= 0) */
+    float    applied_gain_db;      /* strips: fader × mute × AFV now (-144 = silent) */
+    float    momentary_lufs;       /* buses 0..4: EBU R128 (-144 = no signal) */
+    float    short_term_lufs;
+    float    integrated_lufs;      /* gated, since session start or reset */
+} mixit_audio_meter;
+
+typedef struct mixit_audio_block_info {
+    uint32_t struct_size;
+    uint32_t frames;               /* sample frames written (interleaved, session channels) */
+    int64_t  pts_ns;               /* master-clock time of the first frame */
+    int64_t  first_sample;         /* session sample index of the first frame */
+} mixit_audio_block_info;
+
+/* Strip settings of an input (any time; applied from the next 10 ms block). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_audio_strip(mixit_session session, uint32_t input_id,
+                                                                 const mixit_audio_strip* strip);
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_audio_strip(mixit_session session, uint32_t input_id,
+                                                                 mixit_audio_strip* out_strip);
+/* Master / aux bus settings (bus 0..4). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_audio_bus(mixit_session session, uint32_t bus,
+                                                               const mixit_audio_bus_config* config);
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_audio_bus(mixit_session session, uint32_t bus,
+                                                               mixit_audio_bus_config* out_config);
+/* Bus the monitor plays when nothing is soloed (0..4; default master). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_monitor_source(mixit_session session, uint32_t bus);
+/* Meters: one input strip, or one bus (0..5). Values are updated every block. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_input_meter(mixit_session session, uint32_t input_id,
+                                                                 mixit_audio_meter* out_meter);
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_bus_meter(mixit_session session, uint32_t bus,
+                                                               mixit_audio_meter* out_meter);
+/* Restarts integrated loudness of bus 0..4. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_reset_loudness(mixit_session session, uint32_t bus);
+/* Pops mixed audio of a bus (0..5): whole contiguous 10 ms blocks, interleaved
+ * float, session channel count. `capacity_frames` must hold at least one
+ * block (else BUFFER_TOO_SMALL with info.frames = block size). NOT_FOUND if
+ * nothing is waiting. Each bus keeps 500 ms (older blocks are dropped); one
+ * reader per bus (diagnostics, tests, simple recorders). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_read_bus_audio(mixit_session session, uint32_t bus, float* dest,
+                                                                uint32_t capacity_frames,
+                                                                mixit_audio_block_info* out_info);
 
 #ifdef __cplusplus
 } /* extern "C" */

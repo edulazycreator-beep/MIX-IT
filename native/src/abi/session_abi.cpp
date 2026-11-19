@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "abi/abi_common.hpp"
+#include "abi/session_handles.hpp"
 #include "core/last_error.hpp"
 #include "media/capture_source.hpp"
 #include "media/file_source.hpp"
@@ -16,7 +17,7 @@
 static_assert(sizeof(mixit_session_config) == 40);
 constexpr std::uint32_t kSessionConfigV02Size = 32;
 static_assert(sizeof(mixit_test_source_config) == 32);
-static_assert(sizeof(mixit_session_stats) == 136);
+static_assert(sizeof(mixit_session_stats) == 168);
 static_assert(offsetof(mixit_session_stats, preview_input_id) == 96);
 static_assert(sizeof(mixit_layer_config) == 48);
 
@@ -24,7 +25,7 @@ static_assert(sizeof(mixit_layer_config) == 48);
 constexpr std::uint32_t kSessionStatsV02Size = 96;
 static_assert(offsetof(mixit_session_stats, ticks) == 16);
 static_assert(offsetof(mixit_session_stats, video_latency_max_ns) == 88);
-static_assert(sizeof(mixit_input_stats) == 128);
+static_assert(sizeof(mixit_input_stats) == 144);
 static_assert(offsetof(mixit_input_stats, decode_errors) == 112);
 static_assert(sizeof(mixit_file_source_config) == 16);
 static_assert(sizeof(mixit_capture_device_info) == 648);
@@ -70,6 +71,12 @@ std::shared_ptr<media::Session> resolve(mixit_session handle) {
 }
 
 constexpr const char* kInvalidSession = "invalid session handle";
+
+}  // namespace
+
+std::shared_ptr<mixit::media::Session> mixit::abi::resolve_session(mixit_session handle) { return resolve(handle); }
+
+namespace {
 
 mixit_result copy_frame(const char* fn, mixit_session session, media::Bus bus, uint8_t* buffer, uint32_t buffer_size,
                         uint32_t stride, mixit_video_frame_info* out_info) noexcept {
@@ -315,6 +322,10 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_get_stats(mixit_session session,
         o.transitions_completed = st.transitions_completed;
         o.composited_frames = st.composited_frames;
         o.compositor_fallbacks = st.compositor_fallbacks;
+        o.audio_blocks = st.audio_blocks;
+        o.audio_late_blocks = st.audio_late_blocks;
+        o.audio_skipped_blocks = st.audio_skipped_blocks;
+        o.audio_max_lateness_ns = st.audio_max_lateness_ns;
         mixit::abi::write_out_prefix(out_stats, o);
         return MIXIT_OK;
     });
@@ -351,6 +362,8 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_get_input_stats(mixit_session se
         o.av_offset_max_abs_ns = st.av_offset_max_abs_ns;
         o.decode_errors = st.decode_errors;
         o.loops = st.loops;
+        o.audio_underrun_frames = st.audio_underrun_frames;
+        o.audio_late_blocks = st.audio_late_blocks;
         const std::uint32_t caller_size = out_stats->struct_size;
         std::memcpy(out_stats, &o, std::min<std::size_t>(caller_size, sizeof(o)));
         out_stats->struct_size = caller_size;

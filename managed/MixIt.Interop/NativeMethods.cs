@@ -21,7 +21,7 @@ internal static unsafe partial class NativeMethods
     // Version of the C header this binding was written against. Must be kept
     // in sync with MIXIT_API_VERSION_* in mixit_engine.h.
     public const uint ExpectedApiMajor = 0;
-    public const uint ExpectedApiMinor = 3;
+    public const uint ExpectedApiMinor = 4;
     public const uint ExpectedApiPatch = 0;
     public const uint ExpectedApiVersion = (ExpectedApiMajor << 24) | (ExpectedApiMinor << 12) | ExpectedApiPatch;
 
@@ -148,6 +148,45 @@ internal static unsafe partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial NativeResult mixit_session_copy_bus_frame(SessionHandle session, int bus, byte* buffer, uint bufferSize,
         uint stride, MixitVideoFrameInfo* info);
+
+    // ---- audio mixer (API 0.4)
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_audio_strip(SessionHandle session, uint inputId, MixitAudioStrip* strip);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_audio_strip(SessionHandle session, uint inputId, MixitAudioStrip* strip);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_audio_bus(SessionHandle session, uint bus, MixitAudioBusConfig* config);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_audio_bus(SessionHandle session, uint bus, MixitAudioBusConfig* config);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_monitor_source(SessionHandle session, uint bus);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_input_meter(SessionHandle session, uint inputId, MixitAudioMeter* meter);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_bus_meter(SessionHandle session, uint bus, MixitAudioMeter* meter);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_reset_loudness(SessionHandle session, uint bus);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_read_bus_audio(SessionHandle session, uint bus, float* dest,
+        uint capacityFrames, MixitAudioBlockInfo* info);
 
     // ---- capture devices (API 0.3, experimental)
 

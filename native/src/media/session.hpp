@@ -1,4 +1,5 @@
-// Production session (lifecycle steps 3–8): inputs → frame sync → program bus.
+// Production session (lifecycle steps 3–8): inputs → frame sync → buses, and
+// inputs → audio mixer → audio buses (M4, session_audio.cpp).
 //
 // Milestone 2 scope (CPU reference path):
 //   * Inputs are synthetic test-signal sources, each with its own resolution
@@ -26,6 +27,7 @@
 #include <thread>
 #include <vector>
 
+#include "audio/channel_strip.hpp"
 #include "core/status.hpp"
 #include "media/compositor.hpp"
 #include "media/media_queue.hpp"
@@ -33,6 +35,7 @@
 #include "media/media_types.hpp"
 #include "media/test_signal.hpp"
 #include "media/time_base.hpp"
+#include "util/triple_buffer.hpp"
 
 namespace mixit {
 class Logger;
@@ -90,6 +93,8 @@ struct InputStats {
     std::int64_t av_offset_max_abs_ns = 0;
     std::uint64_t decode_errors = 0;       // file/capture sources
     std::uint64_t loops = 0;               // file sources: times the file restarted
+    std::uint64_t audio_underrun_frames = 0;  // mix needed samples the source had not delivered (silence)
+    std::uint64_t audio_late_blocks = 0;      // blocks that arrived after their mix time (discarded)
 };
 
 struct SessionStats {
@@ -113,6 +118,19 @@ struct SessionStats {
     std::uint64_t compositor_fallbacks = 0;    // GPU failures that switched the session to the CPU compositor
     std::uint64_t transitions_completed = 0;
     std::uint64_t composited_frames = 0;       // bus frames rendered by the compositor (not zero-copy)
+    std::uint64_t audio_blocks = 0;            // mix blocks processed
+    std::uint64_t audio_late_blocks = 0;       // mix blocks started more than one block late
+    std::uint64_t audio_skipped_blocks = 0;    // mix blocks skipped to recover from a stall (silence)
+    std::int64_t audio_max_lateness_ns = 0;
+};
+
+// Audio bus indices: 0 master, 1..4 aux A..D, 5 monitor (listen, read-only).
+inline constexpr std::uint32_t kAudioBusCount = audio::kMixBuses + 1;
+
+struct AudioBusFrameInfo {
+    std::uint32_t frames = 0;
+    std::int64_t pts_ns = 0;        // time of the first sample on the master clock
+    std::int64_t first_sample = 0;  // session sample index of the first sample
 };
 
 struct ProgramFrameInfo {
@@ -166,6 +184,22 @@ public:
     Status copy_bus_frame(Bus bus, std::uint8_t* dest, std::size_t dest_size, std::uint32_t dest_stride,
                           ProgramFrameInfo& info);
 
+    // ---- audio mixer (M4) --------------------------------------------------
+    Status set_audio_strip(std::uint32_t input_id, const audio::StripParams& params);
+    Status get_audio_strip(std::uint32_t input_id, audio::StripParams& out) const;
+    Status set_audio_bus(std::uint32_t bus, const audio::BusParams& params);  // 0..4
+    Status get_audio_bus(std::uint32_t bus, audio::BusParams& out) const;
+    // Bus the monitor follows when nothing is soloed (0..4).
+    Status set_monitor_source(std::uint32_t bus);
+    [[nodiscard]] std::uint32_t monitor_source() const noexcept { return monitor_source_.load(std::memory_order_relaxed); }
+    Status input_meters(std::uint32_t input_id, audio::StripMeters& out);
+    Status bus_meters(std::uint32_t bus, audio::BusMeters& out);  // 0..5
+    Status reset_loudness(std::uint32_t bus);
+    // Pops whole mixed blocks of a bus (interleaved float, session channels)
+    // into `dest` (capacity in sample frames). NOT_FOUND if none is waiting.
+    // One consumer per bus (diagnostics, tests); outputs get their own taps (M5).
+    Status read_bus_audio(std::uint32_t bus, float* dest, std::uint32_t capacity_frames, AudioBusFrameInfo& info);
+
     // Frames/blocks currently held by pools (0 after stop: no leaks).
     [[nodiscard]] std::uint32_t pooled_items_in_use() const;
 
@@ -180,7 +214,13 @@ private:
     void producer_loop(Input& input) noexcept;
     void output_loop() noexcept;
     void sync_input(Input& input, std::int64_t target_ns) noexcept;
-    void consume_audio(Input& input) noexcept;
+    void audio_loop() noexcept;
+    void drain_audio(Input& input, std::int64_t next_block_first) noexcept;
+    void init_audio();
+    void reset_audio_runtime() noexcept;
+    void mix_block(std::int64_t block_index) noexcept;
+    void publish_afv(const BusScene& program, const BusScene* next, float progress) noexcept;
+    void match_av_events(Input& input) noexcept;
     void stop_threads() noexcept;
     struct Transition {
         bool active = false;
@@ -238,6 +278,27 @@ private:
     std::atomic<std::uint64_t> program_frames_{0}, program_black_frames_{0}, program_pool_exhausted_{0};
     std::atomic<std::int64_t> video_latency_last_ns_{0}, video_latency_max_ns_{0};
     std::atomic<std::uint64_t> transitions_completed_{0}, composited_frames_{0};
+
+    // ---- audio ---------------------------------------------------------------
+    // Which inputs are on air for audio-follows-video, published by the output
+    // thread every tick and read by the audio thread.
+    struct AfvState {
+        std::array<std::uint32_t, kMaxLayersPerScene + 1> on_program{};
+        std::array<std::uint32_t, kMaxLayersPerScene + 1> incoming{};  // next scene during a transition
+        float progress = 0.0f;                                          // 0 = program only
+        bool transitioning = false;
+    };
+    struct AudioBus;
+    std::uint32_t audio_block_frames_ = 480;
+    std::int64_t audio_latency_ns_ = 30'000'000;
+    TripleBuffer<AfvState> afv_;
+    std::vector<std::unique_ptr<AudioBus>> audio_buses_;  // kAudioBusCount, created with the session
+    std::atomic<std::uint32_t> monitor_source_{0};
+    std::vector<float> mix_scratch_;                      // one block, session channels
+    std::vector<std::vector<float>> bus_accumulators_;    // kMixBuses + solo accumulator
+    std::thread audio_thread_;
+    std::atomic<std::uint64_t> audio_blocks_{0}, audio_late_blocks_{0}, audio_skipped_blocks_{0};
+    std::atomic<std::int64_t> audio_max_lateness_ns_{0};
 };
 
 }  // namespace mixit::media

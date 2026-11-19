@@ -173,4 +173,42 @@ public class SessionTests
         Assert.Equal(NativeResult.InvalidArgument, Assert.Throws<MixItNativeException>(() =>
             engine.CreateSession(Small with { Compositor = (CompositorPreference)9 })).Result);
     }
+
+    [Fact]
+    public void AudioMixerStripsBusesMetersAndAudioRead()
+    {
+        using var engine = NativeEngine.Create(new NativeEngineOptions());
+        using NativeSession session = engine.CreateSession(Small);
+        var source = new TestSourceOptions { Width = 640, Height = 360, FrameRate = MediaRate.Fps30, ToneHz = 1000 };
+        uint a = session.AddTestSource(source);
+        AudioStripSettings strip = session.GetAudioStrip(a);
+        Assert.True(strip.AudioFollowsVideo);
+        Assert.True(strip.SendsTo(AudioBus.Master));
+        session.SetAudioStrip(a, strip with { FaderDb = -6f, Compressor = strip.Compressor with { Enabled = true } });
+        Assert.Equal(-6f, session.GetAudioStrip(a).FaderDb);
+        Assert.True(session.GetAudioStrip(a).Compressor.Enabled);
+        Assert.Equal(NativeResult.InvalidArgument,
+            Assert.Throws<MixItNativeException>(() => session.SetAudioStrip(a, strip with { FaderDb = 40f })).Result);
+
+        AudioBusSettings master = session.GetAudioBus(AudioBus.Master);
+        Assert.True(master.Limiter);
+        session.SetAudioBus(AudioBus.AuxB, new AudioBusSettings { FaderDb = -3f });
+        Assert.Equal(-3f, session.GetAudioBus(AudioBus.AuxB).FaderDb);
+        session.SetMonitorSource(AudioBus.AuxA);
+
+        session.SetProgramInput(a);
+        session.Start();
+        Thread.Sleep(500);
+        var buffer = new float[480 * 2 * 20];
+        AudioBlockInfo? block = session.TryReadBusAudio(AudioBus.Master, buffer, 2);
+        Assert.NotNull(block);
+        Assert.True(block.Value.Frames >= 480 && block.Value.Frames % 480 == 0);
+        AudioMeterReading meter = session.GetInputMeter(a);
+        Assert.Equal(2, meter.Channels);
+        Assert.InRange(meter.PeakDb[0], -30f, -20f);  // -20 dBFS tone, -6 dB fader, light compression
+        Assert.True(session.GetBusMeter(AudioBus.Master).MomentaryLufs < 0);
+        session.ResetLoudness(AudioBus.Master);
+        SessionStatistics s = session.GetStatistics();
+        Assert.True(s.AudioBlocks > 10);
+    }
 }
