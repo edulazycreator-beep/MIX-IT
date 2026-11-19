@@ -3,6 +3,30 @@
 All notable changes to MIX IT. Format: Keep a Changelog; versions follow the
 native API version until the first product release.
 
+## [0.4.0] — 2026-11-19 — Milestone 4: Audio engine
+
+### Added
+- C ABI 0.4.0 (54 exports): audio mixer (strips, buses, monitor source, meters, loudness reset, bus audio read), audio devices (enumeration, monitor output, audio capture inputs — EXPERIMENTAL), VST3 scan and inserts (EXPERIMENTAL). Appended audio counters to `session_stats` / `input_stats`; 0.2/0.3 struct sizes still accepted.
+- Audio mixer thread on the session sample timeline (10 ms blocks), per-input timeline buffers with zero-filled gaps and underrun counting, per-input delay (lip-sync), lock-free parameter/meter exchange, ramped gains (ADR-0009).
+- Channel strip: trim, high-pass, gate/expander, 4-band parametric EQ, compressor with soft knee, fader, mute, solo (after-fader listen), balance, bus sends; audio-follows-video with transition crossfades.
+- Buses: master + aux A–D with fader, mute, limiter (master −1 dBFS by default); monitor bus (solo or selected source).
+- Metering: ballistic peak, RMS, clip, gain reduction; BS.1770-4 / EBU R128 momentary, short-term and gated integrated loudness.
+- Device clock bridge: SPSC ring + drift-compensating resampler (PI controller, ±0.5 %); WASAPI shared-mode output (event-driven, MMCSS) and capture inputs with device-loss retry; built-in `mixit:null[:ppm]` test device.
+- VST3 host on the pinned MIT `vst3_pluginterfaces` (ADR-0008): scan, load, mono/stereo processing, parameters, bypass, state; 2 insert slots per strip, swappable while running. A VST3 test plug-in is built with the tests.
+- Managed: audio types and bindings, `ProductionService` audio API (settings, inserts and plug-in state survive session rebuilds; plug-ins load on a worker thread).
+- Desktop: **Audio Mixer** — strips with meters, fader, mute/solo/AFV, bus sends; master/aux/monitor buses with loudness; detail editor (trim, delay, high-pass, balance, EQ, gate, compressor); monitor/headphone output and audio-input devices; VST3 insert slots with a generic parameter editor. The self-test checks master level, a fader move, the plug-in scan and the insert slots.
+- ADR-0008 (VST3 in-process host), ADR-0009 (audio timeline and clock bridge).
+- 28 native tests (131 total), 5 managed tests (42 total).
+
+### Changed
+- CI no longer uploads the Windows package unless the repository variable `MIXIT_PUBLISH_PACKAGE` is `true` (owner decision: no downloadable build before M9). The Release build, smoke test and self-test still run on every push.
+- A/V click detection moved to the audio thread (sample-exact); the program audio is now the mixed master.
+
+### Fixed
+- Mute ramps ended a few millionths above zero (accumulated float error); the last frame of a ramp is now exact.
+- The drift resampler oscillated after start-up with excess buffered audio; start-up/stall resync discards the excess.
+- A plug-in parameter changed while the session was stopped was missing from the saved plug-in state.
+
 ## [0.3.0] — 2026-11-17 — Milestone 3: First working video pipeline
 
 ### Added

@@ -235,3 +235,5 @@ Details and raw results: [TEST_REPORT.md](TEST_REPORT.md).
 - [ADR-0005](adr/0005-compositor-cpu-reference-and-d3d11.md) Compositor: CPU reference, Direct3D 11 path, CPU-resident frames
 - [ADR-0006](adr/0006-wpf-monitors-writeablebitmap.md) Preview/program monitors via WriteableBitmap (swap chains deferred)
 - [ADR-0007](adr/0007-capture-media-foundation.md) Video capture through Media Foundation
+- [ADR-0008](adr/0008-vst3-in-process-host.md) VST3 effects hosted in the engine process (first version; out-of-process host planned)
+- [ADR-0009](adr/0009-audio-engine-timeline-and-device-clock-bridge.md) Audio engine on the session sample timeline, drift bridge to device clocks

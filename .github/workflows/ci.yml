@@ -16,6 +16,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The managed VST3 tests must find the test plug-in built with the native tests.
+  MIXIT_REQUIRE_VST3_TEST_BUNDLE: "1"
+
 jobs:
   windows:
     name: Windows (MSVC + .NET)

@@ -194,3 +194,45 @@ Next steps, in order, each measured against the CPU path with
 - `SceneDraw` layers referencing GPU textures; readback only for outputs that need CPU memory (software encode, NDI send), through pooled staging textures with fences instead of a synchronous map.
 - One shared D3D11 device per engine on the adapter chosen from the capability list.
 - Native flip-model swap-chain monitors in WPF (`HwndHost`) replacing the WriteableBitmap monitors (ADR-0006) — M8.
+
+## 10. Audio engine (M4, implemented)
+
+Design decisions: ADR-0009 (timeline, drift bridge), ADR-0008 (VST3).
+
+**Threads.** `mixit-audio` mixes 10 ms blocks (`mix_block`); input producer
+threads write timestamped blocks into each input's queue; the audio thread
+drains them into the input's `SampleFifo` before mixing. Device render threads
+(WASAPI event-driven, MMCSS "Pro Audio") and capture pacers own their device;
+they exchange audio with the mixer only through SPSC rings.
+
+**Per block k** (first sample `k·B`):
+1. for each input with audio: read `[k·B − delay, +B)` from its timeline
+   buffer (missing → silence, counted as underrun after the first write);
+2. run the insert slots (VST3, if any), then the strip DSP: trim, high-pass,
+   gate/expander, 4-band EQ (RBJ biquads), compressor (soft knee), then
+   fader × mute × AFV gain ramped across the block, balance;
+3. add into every bus in `bus_mask`; soloed strips also into the listen sum;
+4. per bus: fader/mute ramp, limiter (instant attack), meters, loudness
+   (K-weighting, 400 ms / 3 s windows, gated integration over a 0.1 LU
+   histogram), then publish a copy to the bus tap (drop-oldest, 50 blocks);
+5. monitor bus = listen sum if any solo, else a copy of the monitor source;
+6. the output bus (if a device is attached) goes into the device ring.
+After the block, `audio_epoch_` advances (used to retire plug-ins safely).
+
+**Audio-follows-video.** The video thread publishes, every tick, which inputs
+are on program (base input + layers with opacity > 0) and, during a
+transition, the incoming set and progress; the audio thread crossfades AFV
+gains from it. No locks between the two threads.
+
+**Real-time rules.** No allocation, locks, logging or I/O in `mix_block`;
+parameter and meter exchange through triple buffers; plug-in parameter
+changes through a fixed latest-value table. Block lateness is measured
+(`audio_max_lateness_ns`, `audio_late_blocks`).
+
+**A/V measurement.** Clicks are detected on the audio thread (sample-exact
+timestamps); flashes on the video thread; matched in a window on the video
+thread (`av_sync_events`, `av_offset_*`).
+
+**Not yet.** Exclusive-mode/ASIO backends, multichannel routing beyond
+stereo, device timestamps for capture endpoints, insert latency compensation,
+out-of-process plug-ins.

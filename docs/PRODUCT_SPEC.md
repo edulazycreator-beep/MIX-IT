@@ -53,12 +53,16 @@ Status: PLANNED · IN_PROGRESS · EXPERIMENTAL · IMPLEMENTED · TESTED · PRODU
 
 | Feature | Status | Milestone |
 |---|---|---|
-| WASAPI / ASIO capture & output | PLANNED | M4 |
-| Gain, fader, pan, mute, solo, mono/stereo/multichannel | PLANNED | M4 |
-| Peak / RMS / LUFS metering | PLANNED | M4 |
-| Master + aux buses, routing, delay, monitoring | PLANNED | M4 |
-| EQ (parametric, 3-band), compressor, limiter, gate, expander, filters | PLANNED | M4 |
-| VST3 hosting (scan, load, bypass, parameters, state, isolation) | PLANNED | M4 |
+| WASAPI shared-mode monitor output and audio inputs (drift-compensated) | EXPERIMENTAL (no real device tested) | M4 |
+| ASIO / WASAPI exclusive | PLANNED — ASIO needs the Steinberg proprietary SDK licence (owner decision) | M4+ |
+| Audio from media files and test signals into the mixer | TESTED | M4 |
+| Trim, fader, balance, mute, solo (after-fader listen), audio-follows-video with crossfade | TESTED | M4 |
+| Mono/stereo sessions; meters up to 8 channels | TESTED (mono/stereo); multichannel routing PLANNED | M4 |
+| Peak / RMS / LUFS (momentary, short-term, integrated, BS.1770-4) metering | TESTED | M4 |
+| Master + 4 aux buses, routing, per-input delay, monitor bus and source | TESTED | M4 |
+| High-pass, 4-band parametric EQ (shelves/peaks), gate/expander, compressor, bus limiters | TESTED | M4 |
+| VST3 inserts: scan, load, bypass, parameters, state (2 slots per strip) | EXPERIMENTAL — in-process (ADR-0008); tested with a test plug-in only | M4 |
+| VST3 isolation (out-of-process), editors, latency compensation | PLANNED | M8–M9 |
 
 ## Streaming and recording
 

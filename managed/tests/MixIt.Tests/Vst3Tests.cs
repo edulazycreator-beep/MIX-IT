@@ -16,6 +16,10 @@ public sealed class Vst3Tests
             string candidate = Path.Combine(dir, "vst3", "MixItTestGain.vst3");
             if (Directory.Exists(candidate)) return candidate;
         }
+        if (Environment.GetEnvironmentVariable("MIXIT_REQUIRE_VST3_TEST_BUNDLE") == "1")
+        {
+            throw new InvalidOperationException("MixItTestGain.vst3 not found next to the native engine (CI requires it).");
+        }
         return null;
     }
 

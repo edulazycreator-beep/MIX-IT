@@ -1,14 +1,17 @@
-# MIX IT — Native Engine API Contract (v0.3.0)
+# MIX IT — Native Engine API Contract (v0.4.0)
 
 Header: [`native/include/mixit/mixit_engine.h`](../native/include/mixit/mixit_engine.h).
 Library: `mixit_engine.dll` (Windows x64), `libmixit_engine.so` (Linux dev host).
-Exported symbols: exactly the 33 functions below (verified with `nm`/`objdump`).
+Exported symbols: exactly the 54 functions below (verified with `nm`/`objdump`).
 
 | Version | Added |
 |---|---|
 | 0.1.0 (M1) | engine lifecycle, logging, diagnostics, capabilities |
 | 0.2.0 (M2) | sessions (lifecycle steps 3–8), test-signal inputs, program frame access, media library (FFmpeg) queries |
 | 0.3.0 (M3) | media-file inputs, preview bus, cut, transitions, layers, bus frame access, compositor preference, capture devices (experimental); appended fields in `session_config`, `session_stats`, `input_stats` |
+| 0.4.0 (M4) | audio mixer (strips, buses, monitor, meters, loudness, bus audio read), audio devices (monitor output, audio inputs; experimental), VST3 inserts (experimental); appended audio counters in `session_stats`, `input_stats` |
+
+API 0.x requires an **exact minor match** at `mixit_engine_create`.
 
 ## General rules
 
@@ -181,6 +184,45 @@ Appended fields keep older callers working: a 0.2-sized `mixit_session_config`
 
 **`mixit_session_add_capture_source(session, config, out_input_id)`** — only when not RUNNING. `device_id` from enumeration; `width`/`height` both 0 (= largest mode up to 1920×1080) or both set; `frame_rate_num` 0 = highest up to 60 fps. Video only; frames stamped on arrival. Device loss: last frame held, `decode_errors` counted, reopened every second (ADR-0007). `NOT_FOUND` no such device; `NOT_SUPPORTED` no usable mode / no backend.
 
+### Audio mixer — API 0.4 (M4)
+
+The session mixes on its own audio thread in 10 ms blocks on the session sample
+timeline (ENGINE_DESIGN §10). Every input with audio has a **strip**:
+[VST3 inserts] → trim → high-pass → gate/expander → 4-band EQ → compressor →
+fader × mute × audio-follows-video (ramped) → balance → bus sends.
+Buses: master + aux A–D (`MIXIT_AUDIO_BUS_MASTER` 0, `_AUX_A..D` 1–4), each with
+fader, mute and limiter (master limiter on by default at −1 dBFS), plus the
+read-only **monitor** bus (5): after-fader solo if any strip is soloed, else a
+copy of the monitor source bus. Monitor never feeds program.
+
+**`mixit_session_set_audio_strip / get_audio_strip(session, input_id, strip)`** — any time. Ranges in the header; `INVALID_ARGUMENT` outside them or for unknown flags. Defaults: fader 0 dB, AFV on, master send only, EQ bands at 100 Hz shelf / 500 Hz / 2.5 kHz / 8 kHz shelf (flat). AFV: the input is heard while it is on program (base or a visible layer); transitions crossfade it. `NOT_FOUND` unknown input; `INVALID_ARGUMENT` input without audio.
+
+**`mixit_session_set_audio_bus / get_audio_bus(session, bus, config)`** — buses 0–4.
+
+**`mixit_session_set_monitor_source(session, bus)`** — bus 0–4 copied to monitor when nothing is soloed.
+
+**`mixit_session_get_input_meter(session, input_id, meter)`, `mixit_session_get_bus_meter(session, bus, meter)`** — per channel (up to 8): ballistic peak (20 dB/1.5 s fall), 300 ms RMS, clip flag, gain reduction (strip dynamics / bus limiter); buses 0–4 also momentary, short-term and gated integrated loudness (BS.1770-4 / EBU R128, LUFS; −144 = no signal). **`mixit_session_reset_loudness(session, bus)`** restarts integration.
+
+**`mixit_session_read_bus_audio(session, bus, dest, capacity_frames, info)`** — interleaved float32 of any bus (0–5), up to 50 blocks buffered per bus (drop-oldest). `NOT_FOUND` when nothing new; `info` has `first_sample`, `frames`, `pts_ns` on the master clock. One reader per bus.
+
+### Audio devices — API 0.4 (EXPERIMENTAL, Windows WASAPI)
+
+**`mixit_enumerate_audio_devices(engine, direction, devices, capacity, out_count)`** — active render/capture endpoints (shared-mode mix format). `NOT_SUPPORTED` where no backend exists (Linux dev host). The id `"mixit:null[:ppm]"` is a built-in **test device** on every platform (not enumerated): it consumes/produces audio on its own clock, optionally offset by ±ppm.
+
+**`mixit_session_set_audio_output(session, config)`** — plays a bus (normally monitor) on a device; any time; NULL turns it off. Shared mode, float32 at the session format (Windows converts). A drift-compensating resampler bridges the mixer clock and the device clock (±0.5 % range). A failing/disappearing device is retried every second. **`mixit_session_get_audio_output_stats`**: state OFF/RUNNING/RETRYING, device name, buffered ms, underruns, dropped frames, device errors, `drift_ratio`.
+
+**`mixit_session_add_audio_capture_source(session, config, out_input_id)`** — only when not RUNNING; an audio-only input from a capture endpoint, resampled onto the session clock with the same drift bridge. AFV is off by default for such inputs.
+
+### VST3 inserts — API 0.4 (EXPERIMENTAL, ADR-0008)
+
+Plug-ins run **inside the engine process**: a faulty plug-in can crash the engine. Mono and stereo sessions; no editors, sidechains, MIDI or latency compensation.
+
+**`mixit_scan_vst3(engine, path, plugins, capacity, out_count)`** — a `.vst3` bundle, a folder (recursive), or the default folders when `path` is NULL/"". Loads every binary (slow, not on a UI thread). Failing plug-ins are logged and skipped; entries with paths ≥ 512 bytes are skipped. `BUFFER_TOO_SMALL` with `out_count` when capacity is short.
+
+**`mixit_session_set_audio_insert(session, input_id, config)`** — slot 0..1 (`MIXIT_AUDIO_INSERT_SLOTS`), any time incl. RUNNING. Loads the class (`path`, 32-hex `class_id`) and optional `state`, then swaps it in; a replaced effect is destroyed after the audio thread has finished with it. `NOT_FOUND` unknown class/input; `NOT_SUPPORTED` plug-in refuses the bus layout/32-bit float, or no VST3 support in the build.
+
+**`mixit_session_remove_audio_insert`**, **`mixit_session_set_audio_insert_bypass`**, **`mixit_session_get_audio_insert`** (`NOT_FOUND` = empty slot; reports parameter count, latency, failed blocks), **`mixit_session_get_audio_insert_parameter(…, index, out)`** (normalized value, default, steps, title, units, plug-in display text), **`mixit_session_set_audio_insert_parameter(…, parameter_id, value 0..1)`**, **`mixit_session_get_audio_insert_state(…, buffer, capacity, out_size)`** (opaque blob; capacity 0 queries the size).
+
 ### Media library (API 0.2, global)
 
 **`mixit_get_media_library_info(out_info)`** — FFmpeg presence, versions (`major<<16|minor<<8|micro`), licence string and flags `COMPILED_IN`, `VERSIONS_MATCH`, `LICENSE_LGPL`, `LGPL_REQUIRED`, `USABLE` (= compiled ∧ versions match ∧ (LGPL ∨ ¬required)). See ADR-0004.
@@ -198,14 +240,27 @@ Appended fields keep older callers working: a 0.2-sized `mixit_session_config`
 | `mixit_gpu_adapter_info` | 160 | `description` 32 |
 | `mixit_session_config` | 40 | `compositor` 32 (0.2 size 32 accepted) |
 | `mixit_test_source_config` | 32 | |
-| `mixit_session_stats` | 136 | `ticks` 16, `video_latency_max_ns` 88, `preview_input_id` 96, `transitions_completed` 112, `compositor_fallbacks` 128 (0.2 size 96 accepted) |
-| `mixit_input_stats` | 128 | `frames_produced` 8, `av_offset_max_abs_ns` 104, `decode_errors` 112 (0.2 size 112 accepted) |
+| `mixit_session_stats` | 168 | `ticks` 16, `video_latency_max_ns` 88, `preview_input_id` 96, `transitions_completed` 112, `compositor_fallbacks` 128, `audio_blocks` 136 (0.2/0.3 sizes 96/136 accepted) |
+| `mixit_input_stats` | 144 | `frames_produced` 8, `av_offset_max_abs_ns` 104, `decode_errors` 112, `audio_underrun_frames` 128 (0.2/0.3 sizes 112/128 accepted) |
 | `mixit_file_source_config` | 16 | `path` 8 |
 | `mixit_layer_config` | 48 | `opacity` 40 |
 | `mixit_capture_device_info` | 648 | `name` 8, `id` 136 |
 | `mixit_capture_source_config` | 32 | `device_id` 8 |
 | `mixit_video_frame_info` | 56 | `tick_pts_ns` 24, `tick_index` 48 |
 | `mixit_media_library_info` | 152 | |
+| `mixit_eq_band` | 20 | |
+| `mixit_audio_strip` | 160 | `eq` 32, `gate_threshold_db` 112, `comp_threshold_db` 136 |
+| `mixit_audio_bus_config` | 24 | |
+| `mixit_audio_meter` | 104 | `peak_db` 16, `gain_reduction_db` 80 |
+| `mixit_audio_block_info` | 24 | |
+| `mixit_audio_device_info` | 408 | `name` 24, `id` 152 |
+| `mixit_audio_output_config` | 24 | `device_id` 8 |
+| `mixit_audio_output_stats` | 176 | `drift_ratio` 40 |
+| `mixit_audio_capture_config` | 16 | |
+| `mixit_vst3_plugin_info` | 1008 | `class_id` 8, `path` 496 |
+| `mixit_audio_insert_config` | 40 | `path` 8, `state` 24 |
+| `mixit_audio_insert_info` | 320 | `process_errors` 16, `class_id` 24 |
+| `mixit_audio_insert_parameter` | 256 | `default_value` 16, `title` 32 |
 | `mixit_codec_info` | 128 | |
 
 Changing any of these requires updating the `static_assert`s in `src/abi/*.cpp`, `MixIt.Interop/NativeStructs.cs`, the layout tests, and bumping `MIXIT_API_VERSION`.

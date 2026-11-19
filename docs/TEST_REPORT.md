@@ -1,5 +1,47 @@
 # MIX IT — Test Report
 
+## Run: Milestone 4 (audio engine) — 2026-11-19
+
+### GitHub Actions
+
+| Run (commit) | Result |
+|---|---|
+| 44474551238 (6eb6096, M4b) | ✅ Windows + Linux; WPF builds; self-test incl. audio checks PASS |
+| 44476905944 (e560175, M4c) | ✅ Windows + Linux |
+| 44480253897 (44ba2b3, M4d) | ❌ Windows: 3 VST3 tests — the test hard-coded the class id; on Windows VST3 lays out `INLINE_UID` in COM GUID byte order. The plug-in loaded fine. Fixed in 337520a. |
+| 44481086098 (337520a) | ✅ Windows: native **131/131** (incl. VST3 host loading a real `.vst3` DLL with `LoadLibraryExW`), solution incl. WPF **0 warnings**, xUnit **42/42**, probe soak PASS, **`MixIt.exe --self-test production` PASS** (80/79 monitor frames, 0 late ticks) · Linux: see below |
+
+### Local (2-core Linux dev host)
+
+| Check | Result |
+|---|---|
+| Native Debug / Release / ASan+UBSan | ✅ 131/131 each |
+| Native TSan, `-j2` | ✅ 131/131, no TSan reports |
+| Native TSan, `-j6` (3× oversubscribed) | ⚠️ 2–3 *timing* tests fail, a different set each run (`Session.ScalesInputs…`, `Buses.AutoTransition…`, `AudioDevices.OutputCompensates…`); they pass on re-run and at `-j2`. Wall-clock assertions under heavy TSan overload, not data races (no TSan report). CI uses the default parallelism. |
+| MinGW-w64 cross-build | ✅ 0 warnings; exactly the 54 API functions exported; imports unchanged (d3d11, dxgi, kernel32, msvcrt, ole32; MF and avrt loaded at run time) |
+| Managed (xUnit-compatible local runner) | ✅ 42/42 |
+
+### New tests (M4)
+
+- Native (28): DSP (12: biquad responses, shelves, high-pass, compressor curve and timing, gate/expander, limiter ceiling, peak ballistics, RMS, K-weighting response, momentary/short-term loudness, gated integrated loudness of a −23 LUFS tone, gain ramps), mixer through the ABI (7: AFV with program switches and transitions, fader/mute/trim/bus fader, routing/solo/monitor, delay, meters/loudness, A/V alignment of the mixed program audio, **VST3 insert while running**), drift bridge (3: transparency, ±ppm tracking over a 400 s simulation, start-up/stall resync), devices with the null device (3: output compensating a clock offset, capture input level/frequency/no dropouts, device loss and retry), VST3 host (3: scan, process/parameters/bypass/state mono+stereo, zero-frame parameter flush).
+- Managed (5): audio strips/buses/meters/bus audio read, audio settings surviving a format change, monitor output + audio input on the test device, VST3 scan/insert/parameters/bypass/state, plug-in inserts and their settings surviving a session rebuild; layout checks for every new struct.
+
+### Defects found and fixed
+
+1. Mute ramp ended at −1.6e-6 instead of 0 (float accumulation) → per-frame interpolation, exact last frame.
+2. Integrated loudness read −23.17 LUFS after silence: the transition blocks are legitimately included by the gating; test changed to a 20 s tone.
+3. Drift resampler oscillated and the expected sign in the test was wrong (a fast device needs ratio ≈ 1 − ppm) → retuned PI controller, ~1 s fill smoothing, averaged assertion.
+4. Device tests flaky under parallel load: start-up excess fill raised the ratio and shifted pitch → start-up/stall resync discards excess audio.
+5. `ProductionService.GetAudioOutputStatistics()` returned null after a format change → the session is rebuilt immediately.
+6. A plug-in parameter changed while the session was stopped was missing from the saved state → zero-length process call delivers it.
+7. VST3 class id byte order differs on Windows (see CI table).
+
+### Limitations
+
+- **No audio hardware** anywhere: WASAPI output/capture paths ran only as far as "no device"/enumeration on CI; the drift bridge is verified with the simulated null device.
+- **Only the test plug-in** has been hosted; commercial VST3 plug-ins are untested (ADR-0008).
+- The WPF Audio Mixer was exercised by the self-test, not by a person.
+
 ## Run: Milestone 3 (video pipeline) — 2026-11-17
 
 ### GitHub Actions — run 44041552714 (commit 1389f21)
