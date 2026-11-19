@@ -11,7 +11,14 @@ using namespace mixit::audio;
 #if defined(MIXIT_TEST_VST3_BUNDLE)
 
 namespace {
-constexpr const char* kCid = "4D49584954544553544741494E303030";
+// The class id as scanned. Its bytes differ per platform: on Windows, VST3
+// lays out INLINE_UID in COM GUID order.
+std::string test_cid() {
+    std::vector<Vst3PluginInfo> found;
+    std::vector<std::string> errors;
+    if (!vst3_scan(MIXIT_TEST_VST3_BUNDLE, found, errors).is_ok() || found.empty()) return {};
+    return found[0].class_id;
+}
 }
 
 TEST(Vst3Host, ScansTheTestBundle) {
@@ -22,7 +29,12 @@ TEST(Vst3Host, ScansTheTestBundle) {
     ASSERT_EQ(found.size(), 1u);
     EXPECT_EQ(found[0].name, "MIX IT Test Gain");
     EXPECT_EQ(found[0].vendor, "MIX IT tests");
-    EXPECT_EQ(found[0].class_id, kCid);
+    EXPECT_EQ(found[0].class_id.size(), 32u);
+#if defined(_WIN32)
+    EXPECT_EQ(found[0].class_id, "4958494D54545345544741494E303030") << "COM GUID byte order";
+#else
+    EXPECT_EQ(found[0].class_id, "4D49584954544553544741494E303030");
+#endif
     // Scanning the parent folder finds it too.
     const std::string folder = std::string(MIXIT_TEST_VST3_BUNDLE).substr(0, std::string(MIXIT_TEST_VST3_BUNDLE).rfind('/'));
     ASSERT_TRUE(vst3_scan(folder, found, errors).is_ok());
@@ -31,6 +43,7 @@ TEST(Vst3Host, ScansTheTestBundle) {
 }
 
 TEST(Vst3Host, ProcessesWithParametersBypassAndState) {
+    const std::string kCid = test_cid();
     std::unique_ptr<Vst3Effect> fx;
     const mixit::Status st = Vst3Effect::create(MIXIT_TEST_VST3_BUNDLE, kCid, 48000, 2, 480, fx);
     ASSERT_TRUE(st.is_ok()) << st.message();
@@ -89,13 +102,13 @@ TEST(Vst3Host, NotBuilt) {
 #if defined(MIXIT_TEST_VST3_BUNDLE)
 TEST(Vst3Host, ZeroFrameProcessDeliversParametersForState) {
     std::unique_ptr<Vst3Effect> fx;
-    ASSERT_TRUE(Vst3Effect::create(MIXIT_TEST_VST3_BUNDLE, "4D49584954544553544741494E303030", 48000, 2, 480, fx).is_ok());
+    ASSERT_TRUE(Vst3Effect::create(MIXIT_TEST_VST3_BUNDLE, test_cid(), 48000, 2, 480, fx).is_ok());
     ASSERT_TRUE(fx->set_parameter(1, 0.75).is_ok());
     fx->process(nullptr, 0);  // no audio thread: flush the change to the processor
     std::vector<std::uint8_t> state;
     ASSERT_TRUE(fx->get_state(state).is_ok());
     std::unique_ptr<Vst3Effect> other;
-    ASSERT_TRUE(Vst3Effect::create(MIXIT_TEST_VST3_BUNDLE, "4D49584954544553544741494E303030", 48000, 2, 480, other).is_ok());
+    ASSERT_TRUE(Vst3Effect::create(MIXIT_TEST_VST3_BUNDLE, test_cid(), 48000, 2, 480, other).is_ok());
     ASSERT_TRUE(other->set_state(state.data(), state.size()).is_ok());
     double v = 0;
     ASSERT_TRUE(other->get_parameter(1, v).is_ok());
