@@ -20,7 +20,7 @@ namespace MixIt.Remote;
 /// the same <see cref="CommandService"/> as the UI. A slow or vanished client
 /// only loses its own events (bounded queue per client).
 /// </summary>
-public sealed class RemoteControlServer : IAsyncDisposable
+public sealed class RemoteControlServer : IAsyncDisposable, IDisposable
 {
     private const int MaxClients = 32;
     private const int ClientQueue = 256;
@@ -119,6 +119,19 @@ public sealed class RemoteControlServer : IAsyncDisposable
     }
 
     public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
+
+    /// <summary>For synchronous owners (DI containers): stops within a few seconds, never hangs shutdown.</summary>
+    public void Dispose()
+    {
+        try
+        {
+            Task.Run(StopAsync).Wait(TimeSpan.FromSeconds(4));
+        }
+        catch (AggregateException ex)
+        {
+            _logger.LogWarning("Remote control did not stop cleanly: {Message}", ex.InnerException?.Message);
+        }
+    }
 
     /// <summary>Sends an event to every connected WebSocket client (never blocks).</summary>
     public void Publish(string type, object data)

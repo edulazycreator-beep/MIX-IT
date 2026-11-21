@@ -23,7 +23,7 @@ internal static class SelfTest
 {
     public static async Task RunProductionAsync(Task engineStart, ProductionViewModel vm, AudioMixerViewModel mixer,
         OutputsViewModel outputs, GraphicsViewModel graphics, ReplayViewModel replay, ControlHost control, Task controlStart,
-        ProductionService production, ILogger logger, Application app)
+        SettingsViewModel settings, StatusBarViewModel statusBar, ProductionService production, ILogger logger, Application app)
     {
         var failures = new List<string>();
         try
@@ -212,6 +212,29 @@ internal static class SelfTest
             logger.LogInformation("Self-test control: macro {Steps} steps, remote port {Port}, {Commands} commands, tally {Tally}",
                 run.StepsRun, port, control.Commands.Commands.Count, string.Join(",", control.Tally.Current.Select(t => t.Program ? "P" : t.Preview ? "V" : "-")));
             await control.Remote.StopAsync();
+            await vm.ToggleProductionAsync();
+
+            // Settings & workspace: the show survives save + open; a shortcut switches; the dashboard shows ON AIR.
+            string showPath = Path.Combine(Path.GetTempPath(), "mixit_selftest_show.mixit");
+            int inputCount = production.Inputs.Count;
+            settings.SaveShowFile(showPath);
+            IReadOnlyList<string> showWarnings = settings.OpenShowFile(showPath);
+            if (showWarnings.Count > 0) failures.Add($"show reopened with problems: {string.Join("; ", showWarnings)}");
+            if (production.Inputs.Count != inputCount) failures.Add($"show reopened with {production.Inputs.Count} inputs, saved {inputCount}");
+            await vm.ToggleProductionAsync();
+            await Task.Delay(500);
+            settings.TryRunShortcut("D2");
+            await Task.Delay(200);
+            uint beforeKey = production.GetStatistics()?.ProgramInputId ?? 0;
+            if (!settings.TryRunShortcut("Space")) failures.Add("Space is not bound to a command");
+            await Task.Delay(400);
+            uint afterKey = production.GetStatistics()?.ProgramInputId ?? 0;
+            if (afterKey == beforeKey) failures.Add("the Space shortcut did not cut");
+            await Task.Delay(1100);
+            if (!statusBar.IsOnAir) failures.Add("dashboard does not show ON AIR");
+            logger.LogInformation("Self-test workspace: show {Inputs} inputs, shortcut program {Before}->{After}, dashboard '{OnAir}' {Resources}",
+                inputCount, beforeKey, afterKey, statusBar.OnAir, statusBar.Resources);
+            if (settings.Error is not null) failures.Add($"settings error shown: {settings.Error}");
             await vm.ToggleProductionAsync();
 
             logger.LogInformation(

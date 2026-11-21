@@ -25,7 +25,7 @@ public sealed class WpfProductionDispatcher : IProductionDispatcher
 /// automation (ticked once a second), tally (refreshed 10 times a second), PTZ,
 /// the remote-control server and extensions; loads and saves their settings.
 /// </summary>
-public sealed class ControlHost : IAsyncDisposable
+public sealed class ControlHost : IAsyncDisposable, IDisposable
 {
     private readonly ProductionService _production;
     private readonly ControlSettingsStore _store;
@@ -178,6 +178,16 @@ public sealed class ControlHost : IAsyncDisposable
         _wasRunning = _production.IsRunning;
         if (_wasRunning) Automation.ProductionStarted();
         else Automation.ProductionStopped();
+    }
+
+    /// <summary>For the DI container at shutdown: bounded, never blocks the UI thread for long.</summary>
+    public void Dispose()
+    {
+        _tallyTimer.Stop();
+        _automationTimer.Stop();
+        Macros.StopAll();
+        Remote.Dispose();
+        Extensions.Dispose();
     }
 
     public async ValueTask DisposeAsync()

@@ -1,0 +1,91 @@
+<UserControl x:Class="MixIt.Desktop.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Settings & workspace. DataContext: SettingsViewModel. Bindings only. -->
+    <DockPanel>
+        <TextBlock DockPanel.Dock="Top" Text="Settings &amp; Workspace" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+        <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,8" CornerRadius="4"
+                Background="{StaticResource PanelRaisedBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Error}" Value="{x:Null}">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <TextBlock Text="{Binding Error}" TextWrapping="Wrap" />
+        </Border>
+        <TextBlock DockPanel.Dock="Bottom" Text="{Binding Status}" Style="{StaticResource Label}" Margin="0,8,0,0" />
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <!-- Show files -->
+                <Border Style="{StaticResource PanelStyle}" Padding="12" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="SHOW" Style="{StaticResource Label}" />
+                        <TextBlock Text="{Binding ShowName}" Style="{StaticResource Value}" FontSize="16" Margin="0,4,0,8" />
+                        <WrapPanel>
+                            <Button Content="New" Command="{Binding NewShowCommand}" Style="{StaticResource StudioButton}" Margin="0,0,4,4" />
+                            <Button Content="Open…" Command="{Binding OpenShowCommand}" Style="{StaticResource StudioButton}" Margin="0,0,4,4" />
+                            <Button Content="Save" Command="{Binding SaveShowCommand}" Style="{StaticResource StudioButton}" Margin="0,0,4,4" />
+                            <Button Content="Save as…" Command="{Binding SaveShowAsCommand}" Style="{StaticResource StudioButton}" Margin="0,0,4,4" />
+                        </WrapPanel>
+                        <TextBlock Style="{StaticResource Label}" TextWrapping="Wrap" Margin="0,4,0,6"
+                                   Text="A show keeps the format, inputs, names, audio, graphics, replays, overlays and outputs. Stream keys are encrypted for this Windows user. Plug-in inserts are not saved yet. Open/New only while production is stopped." />
+                        <ItemsControl ItemsSource="{Binding RecentShows}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Content="{Binding}" HorizontalAlignment="Left" Margin="0,0,0,2" Style="{StaticResource StudioButton}"
+                                            Command="{Binding DataContext.OpenRecentCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+                <!-- External displays -->
+                <Border Style="{StaticResource PanelStyle}" Padding="12" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="FULL-SCREEN OUTPUT (LED wall, projector, confidence monitor) — experimental" Style="{StaticResource Label}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <ComboBox ItemsSource="{Binding DisplayList}" SelectedItem="{Binding Display}" Width="200" />
+                            <ComboBox ItemsSource="{Binding BusChoices}" SelectedItem="{Binding OutputBus}" DisplayMemberPath="Title" Width="110" Margin="6,0,0,0" />
+                            <Button Content="Open" Command="{Binding OpenOutputCommand}" Style="{StaticResource StudioButton}" Margin="6,0,0,0" />
+                            <Button Content="Close all" Command="{Binding CloseOutputsCommand}" Style="{StaticResource StudioButton}" Margin="6,0,0,0" />
+                            <Button Content="↻" Command="{Binding RefreshDisplaysCommand}" Style="{StaticResource StudioButton}" Margin="6,0,0,0" ToolTip="List displays again" />
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource Label}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                   Text="Frames are copied at the display's pace (not frame-locked yet): fine for screens in the room, not a broadcast playout." />
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource PanelStyle}" Padding="12">
+                    <StackPanel>
+                        <TextBlock Text="FOLDERS" Style="{StaticResource Label}" />
+                        <TextBox Text="{Binding DataFolders, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" FontFamily="{StaticResource MonoFont}" Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- Shortcuts -->
+            <Border Grid.Column="2" Style="{StaticResource PanelStyle}" Padding="12">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="KEYBOARD SHORTCUTS" Style="{StaticResource Label}" />
+                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource Label}" TextWrapping="Wrap" Margin="0,4,0,6"
+                               Text="Key = command (same syntax as macros). Keys: Space, Return, Escape, D1…D9 (number row), NumPad1, F1…F12, letters; prefixes Ctrl+, Shift+, Alt+. Shortcuts do nothing while typing in a text box." />
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Save shortcuts" Command="{Binding ApplyShortcutsCommand}" Style="{StaticResource StudioButton}" />
+                        <Button Content="Defaults" Command="{Binding ResetShortcutsCommand}" Style="{StaticResource StudioButton}" Margin="6,0,0,0" />
+                    </StackPanel>
+                    <TextBox Text="{Binding ShortcutText, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" FontFamily="{StaticResource MonoFont}"
+                             VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap" />
+                </DockPanel>
+            </Border>
+        </Grid>
+    </DockPanel>
+</UserControl>

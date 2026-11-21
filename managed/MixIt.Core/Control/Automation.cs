@@ -209,6 +209,8 @@ public sealed class ControlSettingsStore(string path, ILogger<ControlSettingsSto
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
+        // Files for people to read (not HTML): keep "&", quotes and accents readable.
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         Converters = { new JsonStringEnumConverter() },
     };
 

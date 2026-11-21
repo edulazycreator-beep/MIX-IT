@@ -26,6 +26,7 @@ public partial class App : Application
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MixIt", "logs");
         Directory.CreateDirectory(logDirectory);
 
+        bool selfTestRun = e.Args.Length >= 1 && e.Args[0] == "--self-test";
         var services = new ServiceCollection();
         services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Information).AddDebug());
         services.AddSingleton(new EngineHostOptions
@@ -42,6 +43,12 @@ public partial class App : Application
         services.AddSingleton<ReplayViewModel>();
         // M7 control stack (commands run on this UI thread, the owner of ProductionService).
         bool selfTest = e.Args.Length == 2 && e.Args[0] == "--self-test";
+        if (selfTest)
+        {
+            // Start from a clean profile every run.
+            File.Delete(Path.Combine(Path.GetTempPath(), "mixit-selftest-control.json"));
+            File.Delete(Path.Combine(Path.GetTempPath(), "mixit-selftest-workspace.json"));
+        }
         services.AddSingleton<IProductionDispatcher, WpfProductionDispatcher>();
         services.AddSingleton<CommandService>();
         services.AddSingleton<MacroRunner>();
@@ -63,6 +70,12 @@ public partial class App : Application
         });
         services.AddSingleton<ControlHost>();
         services.AddSingleton<ControlViewModel>();
+        // M8 workspace (self-test uses a temporary file so CI never touches a real profile).
+        services.AddSingleton(sp => new WorkspaceStore(
+            selfTest ? Path.Combine(Path.GetTempPath(), "mixit-selftest-workspace.json") : WorkspaceStore.DefaultPath(),
+            sp.GetRequiredService<ILogger<WorkspaceStore>>()));
+        services.AddSingleton<SettingsViewModel>();
+        services.AddSingleton<StatusBarViewModel>();
         services.AddSingleton<DiagnosticsViewModel>();
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<MainWindow>();
@@ -79,8 +92,14 @@ public partial class App : Application
         {
             // A UI fault must not take the production engine down with it.
             logger.LogError(args.Exception, "Unhandled UI exception");
-            MessageBox.Show(args.Exception.Message, "MIX IT — interface error", MessageBoxButton.OK, MessageBoxImage.Warning);
             args.Handled = true;
+            if (selfTestRun)
+            {
+                // No dialog nobody can close: an unattended run fails instead.
+                Shutdown(3);
+                return;
+            }
+            MessageBox.Show(args.Exception.Message, "MIX IT — interface error", MessageBoxButton.OK, MessageBoxImage.Warning);
         };
 
         // Control settings first: the Automation & Control view model reads them.
@@ -97,7 +116,8 @@ public partial class App : Application
             _ = SelfTest.RunProductionAsync(init, _services.GetRequiredService<ProductionViewModel>(),
                 _services.GetRequiredService<AudioMixerViewModel>(), _services.GetRequiredService<OutputsViewModel>(),
                 _services.GetRequiredService<GraphicsViewModel>(), _services.GetRequiredService<ReplayViewModel>(),
-                control, controlStart, _services.GetRequiredService<ProductionService>(), _services.GetRequiredService<ILogger<App>>(), this);
+                control, controlStart, _services.GetRequiredService<SettingsViewModel>(), _services.GetRequiredService<StatusBarViewModel>(),
+                _services.GetRequiredService<ProductionService>(), _services.GetRequiredService<ILogger<App>>(), this);
         }
     }
 
@@ -105,18 +125,8 @@ public partial class App : Application
     {
         // Disposing the provider disposes EngineHost, which shuts the engine
         // down and flushes its log before the process exits.
-        if (_services?.GetService<ControlHost>() is { } control)
-        {
-            // Stops the remote server and macros; never lets a failure block shutdown.
-            try
-            {
-                control.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));
-            }
-            catch (AggregateException ex)
-            {
-                _services.GetRequiredService<ILogger<App>>().LogWarning(ex, "Control shutdown");
-            }
-        }
+        // Disposing the container stops the control stack (remote server, macros,
+        // extensions; bounded waits) and then the engine.
         _services?.Dispose();
         base.OnExit(e);
     }

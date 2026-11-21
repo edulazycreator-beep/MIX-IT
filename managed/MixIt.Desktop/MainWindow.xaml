@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:MixIt.Desktop.ViewModels"
         xmlns:views="clr-namespace:MixIt.Desktop.Views"
-        Title="MIX IT" Width="1280" Height="800" MinWidth="960" MinHeight="600"
+        Title="{Binding WindowTitle}" Width="1280" Height="800" MinWidth="960" MinHeight="600"
         Style="{StaticResource WindowStyle}">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
@@ -18,6 +18,7 @@
                     <TextBlock Text="MIX" FontWeight="Bold" FontSize="18" />
                     <TextBlock Text=" IT" FontWeight="Light" FontSize="18" Foreground="{StaticResource AccentBrush}" />
                     <TextBlock Text="  Live Production Studio" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Bottom" Margin="0,0,0,2" />
+                    <TextBlock Text="{Binding Settings.ShowName, StringFormat='   ·   {0}'}" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Bottom" Margin="0,0,0,2" />
                 </StackPanel>
                 <Border HorizontalAlignment="Right" CornerRadius="10" Padding="10,3" Background="{StaticResource PanelRaisedBrush}">
                     <StackPanel Orientation="Horizontal">
@@ -36,6 +37,52 @@
                         <TextBlock Text="{Binding EngineStatus}" />
                     </StackPanel>
                 </Border>
+            </DockPanel>
+        </Border>
+
+        <!-- Production dashboard: values from the engine, refreshed every second -->
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource HairlineBrush}"
+                BorderThickness="0,1,0,0" Padding="16,5" DataContext="{Binding StatusBar}">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Right" Text="{Binding Resources}" Foreground="{StaticResource TextSecondaryBrush}" Margin="16,0,0,0" />
+                <TextBlock DockPanel.Dock="Right" Text="{Binding Control}" Foreground="{StaticResource TextSecondaryBrush}" Margin="16,0,0,0" />
+                <TextBlock Text="{Binding Clock}" FontFamily="{StaticResource MonoFont}" FontWeight="SemiBold" Margin="0,0,16,0" />
+                <TextBlock Text="{Binding OnAir}" FontWeight="SemiBold" Margin="0,0,16,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsOnAir}" Value="True">
+                                    <Setter Property="Foreground" Value="{StaticResource ProgramBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <TextBlock Text="{Binding Outputs}" FontWeight="SemiBold" Margin="0,0,16,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource ProgramBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding OutputWarning}" Value="True">
+                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <TextBlock Text="{Binding Timing}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding TimingWarning}" Value="True">
+                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </DockPanel>
         </Border>
 
@@ -90,6 +137,9 @@
 
             <views:ControlView DataContext="{Binding Control}"
                                Visibility="{Binding DataContext.ShowControl, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
+
+            <views:SettingsView DataContext="{Binding Settings}"
+                                Visibility="{Binding DataContext.ShowSettings, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
 
             <views:OutputsView DataContext="{Binding Outputs}"
                                Visibility="{Binding DataContext.ShowOutputs, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />

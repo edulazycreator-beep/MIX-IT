@@ -64,7 +64,7 @@ public sealed record ProductionFormat(string Name, uint Width, uint Height, Medi
 /// <see cref="CanEditInputs"/> is false during production. If the engine is
 /// restarted, the session is rebuilt from the recorded input list on next use.
 /// </remarks>
-public sealed class ProductionService : IDisposable
+public sealed partial class ProductionService : IDisposable
 {
     private static readonly NormalizedRect PipRect = new(0.66f, 0.06f, 0.30f, 0.30f);
 
@@ -685,7 +685,7 @@ public sealed class ProductionService : IDisposable
         }
         try
         {
-            return AddSpec(new InputSpec(ProductionInputKind.Replay, $"Replay {source.Name}", null, false) { ReplayOf = source });
+            return AddSpec(new InputSpec(ProductionInputKind.Replay, $"Replay {source.Label ?? source.Name}", null, false) { ReplayOf = source });
         }
         catch
         {
