@@ -125,8 +125,9 @@ release build.
   `dotnet run --project managed/MixIt.LicenseTool -- keygen <secure folder>`;
   keep the private key offline and backed up. Issue a licence:
   `… -- issue --key <private.pem> --to "Customer" [--expires 2027-12-31] [--machine <id>] --out customer.mixit-license`.
-- Publishing: the CI uploads the package and installer only when the
-  repository variable `MIXIT_PUBLISH_PACKAGE` is `true`.
+- Publishing (since M9): the CI uploads the package folder and the installer
+  as run artifacts on every successful run; set the repository variable
+  `MIXIT_PUBLISH_PACKAGE=false` to stop.
 
 ## CMake options
 

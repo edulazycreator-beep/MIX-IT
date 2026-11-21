@@ -40,9 +40,10 @@ jobs:
         shell: pwsh
         run: ./scripts/build-windows.ps1 -Configuration Debug
       # The Release build and its smoke/self-tests run on every push; the
-      # downloadable package is published only once the product reaches M9
-      # (owner decision 2026-11-19). Enable with the repository variable
-      # MIXIT_PUBLISH_PACKAGE=true.
+      # downloadable package was held back until M9 (owner decision 2026-11-19).
+      # M9 is reached (0.9.0 preview): package and installer are published on
+      # every successful run; set the repository variable
+      # MIXIT_PUBLISH_PACKAGE=false to stop publishing.
       - name: Release build (self-contained) and smoke/self-test MixIt.exe
         shell: pwsh
         env:
@@ -52,15 +53,15 @@ jobs:
       - name: Installer (Inno Setup) — build and silent install/uninstall test
         shell: pwsh
         run: ./scripts/build-installer.ps1
-      - name: Upload installer (when publishing)
-        if: ${{ vars.MIXIT_PUBLISH_PACKAGE == 'true' }}
+      - name: Upload installer
+        if: ${{ vars.MIXIT_PUBLISH_PACKAGE != 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: MixIt-Setup-${{ github.sha }}
           path: artifacts/MixIt-Setup-*.exe
           if-no-files-found: error
-      - name: Upload MixIt-win-x64 (M9 only)
-        if: ${{ vars.MIXIT_PUBLISH_PACKAGE == 'true' }}
+      - name: Upload MixIt-win-x64 package
+        if: ${{ vars.MIXIT_PUBLISH_PACKAGE != 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: MixIt-win-x64-${{ github.sha }}

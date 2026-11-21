@@ -10,7 +10,8 @@
 | 44872051800 (158ddf7) | ❌ Windows: self-test did not finish (async-only services could not be disposed by the DI container; the UI error dialog blocked the unattended run). Fixed in f9bced6. |
 | f9bced6 | ❌ Windows: NU1510 — DPAPI is part of the .NET 10 Windows Desktop framework (package reference removed). |
 | 44873736430 (bfb2d9d, M7+M8) | ✅ Windows: native 154/154, xUnit **56/56**, self-test PASS incl. macro, remote API (401 without token, state, command), tally, show save/open, shortcut, dashboard. Linux superseded by the next push. |
-| 1bb5e7a / later (M9) | see TEST_REPORT updates below / the run page |
+| 1bb5e7a (M9) | ❌ Windows: nullable warning (CS8604) in App.xaml.cs. |
+| 44875238888 (508bdc4) | ✅ Windows: native 154/154, xUnit **59/59**, self-test PASS, installer `MixIt-Setup-0.9.0-x64.exe` built and silently installed/uninstalled · ✅ Linux: Debug, ASan+UBSan, TSan, Release, MinGW |
 
 ### Local
 

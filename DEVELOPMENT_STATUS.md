@@ -1,11 +1,75 @@
 # MIX IT — Development Status
 
-_Last updated: 2026-11-21 (Milestone 6)_
+_Last updated: 2026-11-21 (Milestones 7–9, product version 0.9.0 preview)_
 
-**Current milestone:** M6 — Graphics and production tools → **IMPLEMENTED**, tested on Linux and Windows CI (all jobs green at e41d496, run 44856343384). Real green-screen footage, GPU keyer on real hardware and HTML graphics pending.
-**Previous milestones:** M5 IMPLEMENTED (hardware encoders / real platforms pending); M4 IMPLEMENTED (real audio devices / commercial plug-ins pending); M3 IMPLEMENTED (reference-hardware checks pending); M1/M2 TESTED.
-**Next milestone:** M7 — Advanced features (command API, macros/automation, remote control, tally, PTZ, plug-in SDK).
-**Owner decision in force (2026-11-19):** no downloadable package/ZIP until M9. CI still builds, smoke-tests and self-tests the Release package on every push; upload only with repository variable `MIXIT_PUBLISH_PACKAGE=true`.
+**Current state:** M1–M9 implemented. **0.9.0 is a preview**, not a 1.0: every
+feature is automatically tested on Windows CI without hardware; hardware-facing
+features remain EXPERIMENTAL until checked on a Windows workstation (list below).
+**Owner decision (2026-11-19) fulfilled:** from M9 on, CI publishes the package folder and the installer as run artifacts (opt out with repository variable `MIXIT_PUBLISH_PACKAGE=false`).
+**Owner decisions still open:** code-signing certificate; publisher licence key (`MIXIT_LICENSE_PUBLIC_KEY` — without it builds run as Free only); final Free/Professional limits; H.264/AAC/OpenH264 patent route; ASIO licence; licence activation server.
+
+## Completed in M7 — Advanced features (ADR-0012)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Command layer (UI, macros, automation, remote, extensions share it) | TESTED | ControlTests; self-test |
+| Macros, automation rules (armed only, no catch-up) | TESTED | ControlTests (fake clock); self-test macro |
+| Remote control API 1.0 (HTTP + WebSocket, token, browser panel) | TESTED (automated clients) | ControlTests; self-test (401 without token, state, Cut) |
+| Tally: engine-derived, events, TSL UMD 5.0 over UDP | EXPERIMENTAL | packet bytes verified over UDP; no tally hardware |
+| PTZ: VISCA over IP (Sony, raw UDP/TCP) | EXPERIMENTAL | byte streams verified over UDP; no camera |
+| Extension SDK + loader | EXPERIMENTAL | in-process extension tests; no third-party extension |
+
+## Completed in M8 — Desktop experience
+
+| Item | Status | Evidence |
+|---|---|---|
+| Show files (.mixit), stream keys DPAPI-protected | TESTED | ShowFileTests; self-test save/open |
+| Settings & Workspace (shows, shortcuts, displays, folders), window/section memory | TESTED (self-test shortcut) | |
+| Input Manager; production dashboard strip | TESTED (self-test dashboard ON AIR) | |
+| Full-screen output on another display | EXPERIMENTAL | not frame-locked; no multi-display test |
+| Performance presets, GPU swap-chain monitors, user profiles beyond the Windows account | NOT DONE | need profiling on reference hardware |
+
+## Completed in M9 — Release groundwork (ADR-0013)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Offline signed licences (ECDSA P-256), edition policy at configuration time | TESTED | LicensingTests |
+| `mixit-license` publisher tool | TESTED locally | keygen → issue → verify |
+| Installer (Inno Setup), silent install/uninstall | TESTED in CI | build-installer.ps1 |
+| User guide, package README, product version 0.9.0 | DONE | docs/USER_GUIDE.md |
+| Code signing, compatibility lab, legal review, activation server | NOT DONE | owner / hardware needed |
+
+## Still unverified (needs a Windows workstation with real hardware)
+
+Capture cards and webcams; Direct3D 11 compositor on real GPUs; hardware encoders (NVENC/QSV/AMF); streaming to real platforms (RTMPS/TLS); WASAPI devices and drift over 1 h; commercial VST3 plug-ins; green-screen footage; replay at 1080p60 for minutes; TSL tally receivers; VISCA PTZ cameras; LAN remote clients; extra displays; installer on a clean consumer PC.
+
+## Build status
+
+| Target | Result |
+|---|---|
+| Windows (MSVC `/W4 /WX`, .NET 10 incl. WPF, package, installer) | ✅ run 44875238888 (508bdc4): native 154/154, xUnit 59/59, self-test PASS, installer built + silent install/uninstall |
+| Linux Debug / Release / ASan+UBSan / TSan, MinGW | ✅ (CI) |
+
+## Test results
+
+Native **154/154** · managed **59/59** (Windows CI and local) · production self-test PASS (all sections incl. M7/M8) · installer silent install/uninstall PASS.
+
+## Known issues
+
+1. Builds without `MIXIT_LICENSE_PUBLIC_KEY` cannot verify licences (Free only) — by design until the owner creates the key.
+2. The installer is not code-signed (SmartScreen warning).
+3. Show files do not store VST3 inserts yet.
+4. Full-screen outputs copy frames through WPF (not frame-locked).
+5. Earlier milestones' known issues (below) still apply.
+
+## Next recommended tasks
+
+1. Owner: create the licence key pair, set `MIXIT_LICENSE_PUBLIC_KEY`, confirm the edition table; obtain a code-signing certificate; decide the H.264/AAC route.
+2. Hardware validation pass on a Windows workstation (list above), then 1.0 hardening: GPU-resident pipeline and swap-chain monitors, performance presets from measurements, VST3 out-of-process host, HTML graphics.
+
+---
+
+# Milestone 6 record
 
 ## Completed in M6
 
