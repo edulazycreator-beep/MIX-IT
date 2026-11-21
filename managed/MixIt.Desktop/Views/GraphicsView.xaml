@@ -34,6 +34,8 @@
                                 <ComboBox ItemsSource="{Binding Inputs}" SelectedItem="{Binding Input}" DisplayMemberPath="Title" Width="200"
                                           ToolTip="Graphics, a logo, or a camera (with a key: virtual set)" />
                                 <ComboBox ItemsSource="{Binding Keys}" SelectedItem="{Binding Key}" DisplayMemberPath="Title" Width="140" Margin="6,0,0,0" />
+                                <ComboBox ItemsSource="{Binding Placements}" SelectedItem="{Binding Placement}" DisplayMemberPath="Title" Width="130" Margin="6,0,0,0"
+                                          ToolTip="Virtual set: a keyed presenter placed over the program background" />
                                 <TextBlock Text="fade" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="10,0,4,0" />
                                 <TextBox Text="{Binding FadeFrames, UpdateSourceTrigger=LostFocus}" Width="44" ToolTip="Fade length in frames (0 = cut)" />
                                 <Button Content="IN" Command="{Binding InCommand}" Style="{StaticResource StudioButton}" Margin="8,0,0,0" />

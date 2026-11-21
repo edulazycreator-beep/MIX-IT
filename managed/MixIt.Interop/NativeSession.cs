@@ -100,6 +100,8 @@ public enum VideoBus
 {
     Program = 0,
     Preview = 1,
+    /// <summary>Operator multiview (API 0.6): preview, program and the first 8 inputs with labels and tally.</summary>
+    Multiview = 2,
 }
 
 /// <summary>Transition between preview and program (mirrors MIXIT_TRANSITION_*).</summary>
@@ -154,6 +156,18 @@ public enum GraphicsTimerMode
 }
 
 public sealed record GraphicsInfo(GraphicsTimerMode TimerMode, TimeSpan Timer, bool TimerRunning, ulong FramesRendered, string Warnings);
+
+/// <summary>
+/// An input's instant-replay buffer (API 0.6). Times are session master time
+/// (<see cref="NativeEngine.MonotonicTimeNanoseconds"/> clock), in nanoseconds.
+/// </summary>
+public sealed record ReplayBufferInfo(uint Width, uint Height, long OldestNs, long NewestNs, ulong Frames, ulong Bytes, ulong Dropped)
+{
+    public TimeSpan Length => TimeSpan.FromTicks(Math.Max(0, NewestNs - OldestNs) / 100);
+}
+
+/// <summary>Playback state of a replay input.</summary>
+public sealed record ReplayState(bool Active, bool Paused, float Speed, long PositionNs);
 
 public enum KeyType
 {
@@ -454,6 +468,63 @@ public sealed unsafe class NativeSession : IDisposable
         Check(NativeMethods.mixit_session_get_graphics_info(_handle, inputId, &i), "mixit_session_get_graphics_info");
         return new GraphicsInfo((GraphicsTimerMode)i.TimerMode, TimeSpan.FromMilliseconds(i.TimerMs), i.TimerRunning != 0,
             i.FramesRendered, Utf8.FromNullTerminated(i.Warnings, 256));
+    }
+
+    // ---- multiview and instant replay (API 0.6) ----------------------------
+
+    /// <summary>Label shown for an input on the multiview (empty = "Input N").</summary>
+    public void SetInputLabel(uint inputId, string label)
+    {
+        ArgumentNullException.ThrowIfNull(label);
+        byte* l = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(label);
+        try
+        {
+            Check(NativeMethods.mixit_session_set_input_label(_handle, inputId, l), "mixit_session_set_input_label");
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)l);
+        }
+    }
+
+    /// <summary>
+    /// Records the input's last <paramref name="seconds"/> (5..600) for replay;
+    /// 0 turns it off. <paramref name="quality"/> = JPEG qscale 2 (best)..31.
+    /// </summary>
+    public void EnableReplay(uint inputId, uint seconds, uint quality = 4) =>
+        Check(NativeMethods.mixit_session_enable_replay(_handle, inputId, seconds, quality), "mixit_session_enable_replay");
+
+    public ReplayBufferInfo GetReplayBuffer(uint inputId)
+    {
+        MixitReplayBufferInfo i = default;
+        i.StructSize = (uint)sizeof(MixitReplayBufferInfo);
+        Check(NativeMethods.mixit_session_get_replay_buffer(_handle, inputId, &i), "mixit_session_get_replay_buffer");
+        return new ReplayBufferInfo(i.Width, i.Height, i.OldestNs, i.NewestNs, i.Frames, i.Bytes, i.Dropped);
+    }
+
+    /// <summary>Adds an input that plays <paramref name="sourceInputId"/>'s replay buffer (session not running).</summary>
+    public uint AddReplaySource(uint sourceInputId)
+    {
+        uint id = 0;
+        Check(NativeMethods.mixit_session_add_replay_source(_handle, sourceInputId, &id), "mixit_session_add_replay_source");
+        return id;
+    }
+
+    /// <summary>Plays from buffer time <paramref name="fromNs"/> at 0.1..2x speed.</summary>
+    public void ReplayPlay(uint replayInputId, long fromNs, float speed, bool paused) =>
+        Check(NativeMethods.mixit_session_replay_play(_handle, replayInputId, fromNs, speed, paused ? 1 : 0), "mixit_session_replay_play");
+
+    /// <summary>Changes speed and/or pause; null keeps the current value.</summary>
+    public void ReplayControl(uint replayInputId, float? speed, bool? paused) =>
+        Check(NativeMethods.mixit_session_replay_control(_handle, replayInputId, speed ?? 0f,
+            paused is { } p ? (p ? 1 : 0) : -1), "mixit_session_replay_control");
+
+    public ReplayState GetReplayState(uint replayInputId)
+    {
+        MixitReplayState s = default;
+        s.StructSize = (uint)sizeof(MixitReplayState);
+        Check(NativeMethods.mixit_session_get_replay_state(_handle, replayInputId, &s), "mixit_session_get_replay_state");
+        return new ReplayState(s.Active != 0, s.Paused != 0, s.Speed, s.PositionNs);
     }
 
     /// <summary>Removes overlay layer <paramref name="index"/> of a bus.</summary>

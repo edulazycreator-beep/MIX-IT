@@ -443,6 +443,17 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_set_layer(mixit_session session,
     });
 }
 
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_input_label(mixit_session session, uint32_t input_id,
+                                                                 const char* label) {
+    constexpr const char* fn = "mixit_session_set_input_label";
+    if (label == nullptr) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "label is NULL");
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = resolve(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        return report(fn, s->set_input_label(input_id, label));
+    });
+}
+
 MIXIT_API mixit_result MIXIT_CALL mixit_session_set_overlay(mixit_session session, uint32_t channel,
                                                              const mixit_layer_config* layer) {
     constexpr const char* fn = "mixit_session_set_overlay";
@@ -488,7 +499,9 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_copy_bus_frame(mixit_session ses
                                                                 uint32_t buffer_size, uint32_t stride,
                                                                 mixit_video_frame_info* out_info) {
     constexpr const char* fn = "mixit_session_copy_bus_frame";
-    if (bus != MIXIT_BUS_PROGRAM && bus != MIXIT_BUS_PREVIEW) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown bus");
+    if (bus != MIXIT_BUS_PROGRAM && bus != MIXIT_BUS_PREVIEW && bus != MIXIT_BUS_MULTIVIEW) {
+        return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown bus");
+    }
     return copy_frame(fn, session, static_cast<media::Bus>(bus), buffer, buffer_size, stride, out_info);
 }
 

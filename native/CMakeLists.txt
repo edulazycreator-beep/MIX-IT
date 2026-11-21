@@ -14,6 +14,7 @@ set(MIXIT_CORE_SOURCES
     src/abi/vst3_abi.cpp
     src/abi/output_abi.cpp
     src/abi/graphics_abi.cpp
+    src/abi/replay_abi.cpp
     src/core/engine.cpp
     src/core/last_error.cpp
     src/logging/json.cpp
@@ -36,6 +37,7 @@ set(MIXIT_CORE_SOURCES
     src/graphics/json.cpp
     src/graphics/graphics.cpp
     src/graphics/image_loader.cpp
+    src/replay/replay.cpp
     src/media/test_signal.cpp
     src/media/test_signal_source.cpp
     src/media/graphics_source.cpp

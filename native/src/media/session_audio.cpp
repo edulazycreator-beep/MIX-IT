@@ -379,6 +379,9 @@ void Session::mix_block(std::int64_t k) noexcept {
         bus.meters.publish(bus.processor.meters());
         emit(bus, bus_accumulators_[b].data());
         if (b == 0 && outputs_->wants(0)) outputs_->feed_audio(0, bus_accumulators_[0].data(), frames, first);
+        if (b == 0 && outputs_->wants(kMultiviewSource)) {
+            outputs_->feed_audio(kMultiviewSource, bus_accumulators_[0].data(), frames, first);  // multiview carries program audio
+        }
     }
     // Monitor (listen) bus: soloed strips (after fader) if any, else a copy of
     // the selected bus. Never feeds program.
@@ -590,7 +593,7 @@ void Session::wait_feed_quiescent() noexcept {
 Status Session::add_output(const output::OutputConfig& config, std::uint32_t& out_id) {
     std::lock_guard lock(control_mutex_);
     if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
-    if (config.source_input != 0) {
+    if (config.source_input != 0 && config.source_input != kMultiviewSource) {
         const Input* in = find_input(config.source_input);
         if (in == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(config.source_input)};
         if (!in->source->format().has_video) return {MIXIT_E_INVALID_ARGUMENT, "ISO recording needs an input with video"};
@@ -610,7 +613,7 @@ Status Session::start_output(std::uint32_t id) {
     if (Status st = outputs_->config(id, cfg); !st.is_ok()) return st;
     std::uint32_t w = config_.width, h = config_.height;
     bool has_audio = true;
-    if (cfg.source_input != 0) {
+    if (cfg.source_input != 0 && cfg.source_input != kMultiviewSource) {
         const Input* in = find_input(cfg.source_input);
         if (in == nullptr) return {MIXIT_E_NOT_FOUND, "the output's input no longer exists"};
         const SourceFormat& f = in->source->format();

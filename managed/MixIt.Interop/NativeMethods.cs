@@ -227,6 +227,34 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_input_label(SessionHandle session, uint inputId, byte* label);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_enable_replay(SessionHandle session, uint inputId, uint seconds, uint quality);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_replay_buffer(SessionHandle session, uint inputId, MixitReplayBufferInfo* info);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_add_replay_source(SessionHandle session, uint sourceInputId, uint* inputId);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_replay_play(SessionHandle session, uint replayInputId, long fromNs, float speed, int paused);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_replay_control(SessionHandle session, uint replayInputId, float speed, int paused);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_replay_state(SessionHandle session, uint replayInputId, MixitReplayState* state);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial NativeResult mixit_session_add_output(SessionHandle session, MixitOutputConfig* config, uint* id);
 
     [LibraryImport(LibraryName)]

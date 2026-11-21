@@ -240,6 +240,30 @@ internal unsafe struct MixitGraphicsInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct MixitReplayBufferInfo
+{
+    public uint StructSize;
+    public uint Width;
+    public uint Height;
+    public uint Reserved;
+    public long OldestNs;
+    public long NewestNs;
+    public ulong Frames;
+    public ulong Bytes;
+    public ulong Dropped;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixitReplayState
+{
+    public uint StructSize;
+    public int Active;
+    public int Paused;
+    public float Speed;
+    public long PositionNs;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal unsafe struct MixitOutputConfig
 {
     public uint StructSize;
@@ -518,6 +542,8 @@ internal static class NativeStructSizes
     public const int OverlayInfo = 16;
     public const int GraphicsSourceConfig = 24;
     public const int GraphicsInfo = 288;
+    public const int ReplayBufferInfo = 56;
+    public const int ReplayState = 24;
     public const int OutputStats = 888;
     public const int VideoEncoderInfo = 360;
     public const int AudioInsertConfig = 40;

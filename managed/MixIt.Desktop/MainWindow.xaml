@@ -85,6 +85,9 @@
             <views:GraphicsView DataContext="{Binding Graphics}"
                                 Visibility="{Binding DataContext.ShowGraphics, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
 
+            <views:ReplayView DataContext="{Binding Replay}"
+                              Visibility="{Binding DataContext.ShowReplay, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
+
             <views:OutputsView DataContext="{Binding Outputs}"
                                Visibility="{Binding DataContext.ShowOutputs, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
 

@@ -20,8 +20,11 @@ public enum OutputKind
 
 public sealed record OutputKindChoice(OutputKind Kind, string Title, string UrlHint);
 
-/// <summary>Program, or an input for ISO recording.</summary>
-public sealed record OutputSourceChoice(uint? InputId, string Title);
+/// <summary>Program, the multiview, or an input for ISO recording.</summary>
+public sealed record OutputSourceChoice(uint? InputId, string Title)
+{
+    public bool IsMultiview => InputId == OutputSettings.MultiviewSource;
+}
 
 /// <summary>
 /// Streaming &amp; Recording (M5): destinations for the program (or one input,
@@ -202,8 +205,9 @@ public sealed class OutputsViewModel : ObservableObject
             VideoKbps = _videoKbps,
             VideoEncoder = _encoder == AutoEncoder ? null : _encoder,
             SegmentSeconds = _kind.Kind == OutputKind.RecordFile ? _segmentMinutes * 60 : 0,
+            SourceInputId = _source.IsMultiview ? OutputSettings.MultiviewSource : 0,
         };
-        _production.AddOutput(_name.Trim(), settings, _source.InputId);
+        _production.AddOutput(_name.Trim(), settings, _source.IsMultiview ? null : _source.InputId);
         _streamKey = "";
     }
 
@@ -226,6 +230,7 @@ public sealed class OutputsViewModel : ObservableObject
         uint? keep = _source.InputId;
         Sources.Clear();
         Sources.Add(new OutputSourceChoice(null, "Program"));
+        Sources.Add(new OutputSourceChoice(OutputSettings.MultiviewSource, "Multiview (with program audio)"));
         foreach (ProductionInput input in _production.Inputs) Sources.Add(new OutputSourceChoice(input.Id, $"ISO: {input.Name}"));
         Source = Sources.FirstOrDefault(s => s.InputId == keep) ?? Sources[0];
         Outputs.Clear();
@@ -257,7 +262,9 @@ public sealed class OutputRowViewModel : ObservableObject
     }
 
     public string Name => _output.Name;
-    public string Kind => _output.SourceInputId is not null ? "ISO" : _output.Settings.IsNetwork ? "Stream" : "Recording";
+    public string Kind => _output.SourceInputId is not null ? "ISO"
+        : _output.IsMultiview ? "Multiview"
+        : _output.Settings.IsNetwork ? "Stream" : "Recording";
     public string Target => _stats is { CurrentFile.Length: > 0 } s ? s.CurrentFile : UrlRedaction.Redact(_output.Settings.Url);
     public ICommand StartCommand { get; }
     public ICommand StopCommand { get; }

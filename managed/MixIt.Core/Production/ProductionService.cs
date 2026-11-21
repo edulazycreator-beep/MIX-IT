@@ -15,14 +15,23 @@ public enum ProductionInputKind
     AudioCapture,
     /// <summary>Titles, lower thirds, clock, scoreboard (M6).</summary>
     Graphics,
+    /// <summary>Instant replay of another input (M6, video only).</summary>
+    Replay,
 }
+
+/// <summary>Replay input status for the operator.</summary>
+/// <param name="MarkNs">Marked in-point (master time), null when none.</param>
+public sealed record ReplayStatus(uint ReplayInputId, uint SourceInputId, ReplayBufferInfo Buffer, ReplayState State, long? MarkNs);
 
 /// <summary>An input of the current production, as the operator sees it.</summary>
 public sealed record ProductionInput(uint Id, string Name, ProductionInputKind Kind, string Detail);
 
 /// <summary>A recording or stream destination (M5). Ids are stable across session rebuilds.</summary>
-/// <param name="SourceInputId">null = program; otherwise the input recorded (ISO).</param>
-public sealed record ProductionOutput(int Id, string Name, OutputSettings Settings, uint? SourceInputId);
+/// <param name="SourceInputId">null = program (or the multiview, see <see cref="IsMultiview"/>); otherwise the input recorded (ISO).</param>
+public sealed record ProductionOutput(int Id, string Name, OutputSettings Settings, uint? SourceInputId)
+{
+    public bool IsMultiview => Settings.SourceInputId == OutputSettings.MultiviewSource;
+}
 
 /// <summary>A selectable production format.</summary>
 public sealed record ProductionFormat(string Name, uint Width, uint Height, MediaRate FrameRate)
@@ -159,6 +168,13 @@ public sealed class ProductionService : IDisposable
         RequireStopped("remove inputs");
         int index = _inputs.FindIndex(i => i.Id == inputId);
         if (index < 0) return;
+        // Replays of this input go with it.
+        foreach (InputSpec replay in _specs.Where(r => ReferenceEquals(r.ReplayOf, _specs[index])).ToList())
+        {
+            RemoveInput(_inputs[_specs.IndexOf(replay)].Id);
+        }
+        index = _inputs.FindIndex(i => i.Id == inputId);
+        InputSpec? replayOf = _specs[index].ReplayOf;
         if (_pipInputId == inputId) SetPictureInPicture(null);
         NativeSession session = RequireSession();
         foreach (OutputSpec o in _outputs.Where(o => ReferenceEquals(o.Source, _specs[index])).ToList())
@@ -177,6 +193,12 @@ public sealed class ProductionService : IDisposable
         session.RemoveInput(inputId);
         _inputs.RemoveAt(index);
         _specs.RemoveAt(index);
+        if (replayOf is not null && !_specs.Any(r => ReferenceEquals(r.ReplayOf, replayOf)))
+        {
+            // Last replay of that input: stop recording it (frees the buffer memory).
+            replayOf.ReplaySeconds = 0;
+            session.EnableReplay(_inputs[_specs.IndexOf(replayOf)].Id, 0);
+        }
         RaiseChanged();
     }
 
@@ -458,7 +480,15 @@ public sealed class ProductionService : IDisposable
         return input;
     }
 
-    private uint AddToSession(NativeSession session, InputSpec spec) => spec.Kind switch
+    private uint AddToSession(NativeSession session, InputSpec spec)
+    {
+        uint id = AddSourceToSession(session, spec);
+        session.SetInputLabel(id, spec.Label ?? spec.Name);  // multiview label
+        if (spec.ReplaySeconds > 0) session.EnableReplay(id, (uint)spec.ReplaySeconds, ReplayQuality);
+        return id;
+    }
+
+    private uint AddSourceToSession(NativeSession session, InputSpec spec) => spec.Kind switch
     {
         ProductionInputKind.TestSignal => session.AddTestSource(new TestSourceOptions
         {
@@ -468,6 +498,7 @@ public sealed class ProductionService : IDisposable
         ProductionInputKind.CaptureDevice => session.AddCaptureSource(spec.Path!),
         ProductionInputKind.AudioCapture => session.AddAudioCaptureSource(spec.Path),
         ProductionInputKind.Graphics => AddGraphicsToSession(session, spec),
+        ProductionInputKind.Replay => session.AddReplaySource(_inputs[_specs.IndexOf(spec.ReplayOf!)].Id),
         _ => session.AddFileSource(spec.Path!, spec.Loop),
     };
 
@@ -485,6 +516,7 @@ public sealed class ProductionService : IDisposable
         ProductionInputKind.CaptureDevice => "Capture device (experimental)",
         ProductionInputKind.AudioCapture => "Audio input (experimental)",
         ProductionInputKind.Graphics => "Graphics",
+        ProductionInputKind.Replay => $"Replay, last {spec.ReplayOf!.ReplaySeconds} s",
         _ => spec.Loop ? "Media file, looping" : "Media file",
     };
 
@@ -505,6 +537,7 @@ public sealed class ProductionService : IDisposable
             {
                 uint id = AddToSession(session, _specs[i]);
                 _inputs[i] = _inputs[i] with { Id = id, Detail = Describe(_specs[i]) };
+                if (_specs[i].Kind == ProductionInputKind.Replay) _specs[i].ReplayMark = null;  // new, empty buffer
                 if (_specs[i].Strip is { } strip) session.SetAudioStrip(id, strip);
                 ReapplyInserts(session, id, _specs[i]);
             }
@@ -615,6 +648,9 @@ public sealed class ProductionService : IDisposable
         return (id, o.Layer.Key, RequireSession().GetOverlay(channel));
     }
 
+    /// <summary>Where the channel's input is drawn (normalized program coordinates).</summary>
+    public NormalizedRect GetOverlayDestination(int channel) => _overlays[channel].Layer.Destination;
+
     private void ApplyOverlay(NativeSession session, int channel)
     {
         OverlaySpec o = _overlays[channel];
@@ -622,6 +658,96 @@ public sealed class ProductionService : IDisposable
         uint id = index < 0 ? 0 : _inputs[index].Id;
         session.SetOverlay(channel, o.Layer with { InputId = id });
         if (id != 0 && o.Visible) session.ShowOverlay(channel, true, 0);
+    }
+
+    // ---- instant replay (M6) ----
+
+    /// <summary>JPEG qscale of replay buffers (2 = best .. 31): visually clean at ~2-4 MB/s for 1080p.</summary>
+    public const uint ReplayQuality = 4;
+
+    /// <summary>
+    /// Records <paramref name="sourceInputId"/>'s last <paramref name="seconds"/> (5..600) and adds a
+    /// replay input playing it (not while running). Memory: roughly 3 MB per second at 1080p.
+    /// </summary>
+    public ProductionInput AddReplay(uint sourceInputId, int seconds = 60)
+    {
+        RequireStopped("add inputs");
+        if (seconds is < 5 or > 600) throw new ArgumentOutOfRangeException(nameof(seconds), "5..600 seconds");
+        InputSpec source = SpecOf(sourceInputId);
+        if (source.Kind is ProductionInputKind.Replay or ProductionInputKind.AudioCapture)
+            throw new InvalidOperationException("Replay needs an input with video (not a replay or audio input).");
+        NativeSession session = RequireSession();
+        int previous = source.ReplaySeconds;
+        if (seconds > previous)
+        {
+            session.EnableReplay(sourceInputId, (uint)seconds, ReplayQuality);
+            source.ReplaySeconds = seconds;
+        }
+        try
+        {
+            return AddSpec(new InputSpec(ProductionInputKind.Replay, $"Replay {source.Name}", null, false) { ReplayOf = source });
+        }
+        catch
+        {
+            if (source.ReplaySeconds != previous)
+            {
+                source.ReplaySeconds = previous;
+                session.EnableReplay(sourceInputId, (uint)previous, ReplayQuality);
+            }
+            throw;
+        }
+    }
+
+    public ReplayStatus GetReplayStatus(uint replayInputId)
+    {
+        InputSpec spec = ReplaySpec(replayInputId);
+        NativeSession session = RequireSession();
+        uint source = _inputs[_specs.IndexOf(spec.ReplayOf!)].Id;
+        return new ReplayStatus(replayInputId, source, session.GetReplayBuffer(source), session.GetReplayState(replayInputId), spec.ReplayMark);
+    }
+
+    /// <summary>Marks "now" (the newest recorded frame) as the in-point.</summary>
+    public long MarkReplayIn(uint replayInputId)
+    {
+        ReplayStatus status = GetReplayStatus(replayInputId);
+        if (status.Buffer.Frames == 0) throw new InvalidOperationException("Nothing recorded yet (is production running?).");
+        long mark = status.Buffer.NewestNs;
+        ReplaySpec(replayInputId).ReplayMark = mark;
+        return mark;
+    }
+
+    /// <summary>Plays from the mark, or from <paramref name="secondsBack"/> before the newest frame when there is no mark.</summary>
+    public void PlayReplay(uint replayInputId, float speed, double secondsBack = 5, bool fromMark = true)
+    {
+        ReplayStatus status = GetReplayStatus(replayInputId);
+        if (status.Buffer.Frames == 0) throw new InvalidOperationException("Nothing recorded yet (is production running?).");
+        long from = fromMark && status.MarkNs is { } m ? m : status.Buffer.NewestNs - (long)(secondsBack * 1e9);
+        RequireSession().ReplayPlay(replayInputId, Math.Max(from, status.Buffer.OldestNs), speed, false);
+    }
+
+    /// <summary>Speed and/or pause; null keeps the value.</summary>
+    public void ControlReplay(uint replayInputId, float? speed, bool? paused)
+    {
+        ReplaySpec(replayInputId);
+        RequireSession().ReplayControl(replayInputId, speed, paused);
+    }
+
+    private InputSpec ReplaySpec(uint inputId)
+    {
+        InputSpec spec = SpecOf(inputId);
+        return spec.Kind == ProductionInputKind.Replay ? spec : throw new ArgumentException($"Input {inputId} is not a replay input.", nameof(inputId));
+    }
+
+    /// <summary>Renames an input (also its multiview label).</summary>
+    public void RenameInput(uint inputId, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        int index = _inputs.FindIndex(i => i.Id == inputId);
+        if (index < 0) throw new ArgumentException($"No input {inputId}.", nameof(inputId));
+        RequireSession().SetInputLabel(inputId, name.Trim());
+        _specs[index].Label = name.Trim();  // the spec object is referenced by outputs/overlays/replays: mutate, never replace
+        _inputs[index] = _inputs[index] with { Name = name.Trim() };
+        RaiseChanged();
     }
 
     // ---- outputs: recording and streaming (M5) ----
@@ -641,7 +767,8 @@ public sealed class ProductionService : IDisposable
             if (index < 0) throw new ArgumentException($"No input {iid}.", nameof(isoInputId));
             source = _specs[index];
         }
-        var spec = new OutputSpec(_nextOutputId++, name.Trim(), settings with { SourceInputId = 0 }, source);
+        bool multiview = isoInputId is null && settings.SourceInputId == OutputSettings.MultiviewSource;
+        var spec = new OutputSpec(_nextOutputId++, name.Trim(), settings with { SourceInputId = multiview ? OutputSettings.MultiviewSource : 0 }, source);
         NativeSession session = RequireSession();
         spec.NativeId = session.AddOutput(NativeSettings(spec, session));
         _outputs.Add(spec);
@@ -703,7 +830,7 @@ public sealed class ProductionService : IDisposable
     private OutputSettings NativeSettings(OutputSpec o, NativeSession session)
     {
         _ = session;
-        return o.Settings with { SourceInputId = SourceId(o) ?? 0 };
+        return o.Source is null ? o.Settings : o.Settings with { SourceInputId = SourceId(o) ?? 0 };
     }
 
     private sealed class OutputSpec(int id, string name, OutputSettings settings, InputSpec? source)
@@ -796,6 +923,18 @@ public sealed class ProductionService : IDisposable
 
         /// <summary>Graphics: last timer setting (restored paused after a rebuild).</summary>
         public (GraphicsTimerMode Mode, TimeSpan? Value)? Timer { get; set; }
+
+        /// <summary>Operator's name after a rename (null = <see cref="Name"/>).</summary>
+        public string? Label { get; set; }
+
+        /// <summary>Seconds of this input kept for replay (0 = not recorded).</summary>
+        public int ReplaySeconds { get; set; }
+
+        /// <summary>Replay inputs: the input they replay.</summary>
+        public InputSpec? ReplayOf { get; init; }
+
+        /// <summary>Replay inputs: marked in-point (master time); lost on rebuild (the buffer restarts).</summary>
+        public long? ReplayMark { get; set; }
     }
 
     private sealed class OverlaySpec

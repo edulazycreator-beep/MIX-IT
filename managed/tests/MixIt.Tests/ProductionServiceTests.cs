@@ -256,6 +256,65 @@ public class ProductionServiceTests
     }
 
     [Fact]
+    public async Task ReplaysAnInputAndRecordsTheMultiview()
+    {
+        (EngineHost host, ProductionService service) = Create();
+        using (host)
+        using (service)
+        {
+            IReadOnlyList<VideoEncoderInfo> encoders = await service.QueryEncodersAsync();
+            if (!encoders.Any(e => e.Usable)) return;  // engine without FFmpeg
+            ProductionInput cam = service.AddTestSignal();
+            ProductionInput replay = service.AddReplay(cam.Id, 20);
+            Assert.Equal(ProductionInputKind.Replay, replay.Kind);
+            Assert.Equal("Replay, last 20 s", replay.Detail);
+            Assert.Throws<InvalidOperationException>(() => service.AddReplay(replay.Id));
+            service.RenameInput(cam.Id, "Camera 1");
+            Assert.Equal("Camera 1", service.Inputs[0].Name);
+
+            service.SetFormat(ProductionFormat.Standard.First(f => f.Width == 1280));  // rebuild keeps the replay
+            cam = service.Inputs[0];
+            replay = service.Inputs[1];
+            Assert.Equal("Camera 1", cam.Name);
+
+            string dir = Path.Combine(Path.GetTempPath(), "mixit_managed_multiview");
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+            Directory.CreateDirectory(dir);
+            ProductionOutput mv = service.AddOutput("Multiview", new OutputSettings
+            {
+                Url = Path.Combine(dir, "multiview.mkv"), SourceInputId = OutputSettings.MultiviewSource, VideoKbps = 1500,
+            });
+            Assert.True(mv.IsMultiview);
+
+            await service.StartAsync();
+            service.StartOutput(mv.Id);
+            await Task.Delay(1500);
+            long mark = service.MarkReplayIn(replay.Id);
+            await Task.Delay(500);
+            service.PlayReplay(replay.Id, 0.5f);
+            service.SetProgram(replay.Id);
+            await Task.Delay(1000);
+            ReplayStatus status = service.GetReplayStatus(replay.Id);
+            Assert.Equal(cam.Id, status.SourceInputId);
+            Assert.Equal(mark, status.MarkNs);
+            Assert.True(status.State.Active);
+            Assert.Equal(0.5f, status.State.Speed);
+            Assert.InRange((status.State.PositionNs - mark) / 1e9, 0.3, 0.8);
+            Assert.True(status.Buffer.Frames > 30);
+            service.ControlReplay(replay.Id, null, true);
+            Assert.True(service.GetReplayStatus(replay.Id).State.Paused);
+            OutputStatistics? o = service.GetOutputStatistics(mv.Id);
+            Assert.NotNull(o);
+            Assert.True(o.State is OutputState.Running or OutputState.Starting, $"multiview output {o.State}: {o.LastError}");
+            await service.StopAsync();
+            Assert.True(new FileInfo(Path.Combine(dir, "multiview.mkv")).Length > 10_000);
+
+            service.RemoveInput(cam.Id);  // its replay goes with it
+            Assert.Empty(service.Inputs);
+        }
+    }
+
+    [Fact]
     public async Task PluginInsertsAndTheirSettingsSurviveAFormatChange()
     {
         string? bundle = Vst3Tests.TestBundle();

@@ -13,6 +13,7 @@
 #include "audio/sample_fifo.hpp"
 #include "media/media_source.hpp"
 #include "media/session.hpp"
+#include "replay/replay.hpp"
 #include "util/triple_buffer.hpp"
 
 namespace mixit::media {
@@ -21,12 +22,12 @@ namespace internal {
 
 constexpr std::uint32_t kInputVideoQueue = 4;
 // queue + pending + current + program queue (2) + reader cache + margin
-constexpr std::uint32_t kInputVideoPool = kInputVideoQueue + 8 + 3;  // + ISO encoder queue
+constexpr std::uint32_t kInputVideoPool = kInputVideoQueue + 8 + 3 + 3;  // + ISO encoder queue + replay queue
 constexpr std::uint32_t kInputAudioQueue = 32;  // 320 ms of 10 ms blocks
 // queue + file read-ahead (24) + margin
 constexpr std::uint32_t kInputAudioPool = kInputAudioQueue + 32;
 // program out (2) + reader cache (1) + preview out (2) + cache (1) + black (1) + in flight (1) + margin
-constexpr std::uint32_t kDefaultProgramPool = 16;  // 10 + encoder queues (outputs, M5)
+constexpr std::uint32_t kDefaultProgramPool = 18;  // 10 + encoder queues (M5) + multiview (M6)
 constexpr std::int64_t kAvMatchWindowNs = 100'000'000;
 constexpr std::int64_t kFlashExpiryNs = 500'000'000;
 constexpr std::uint32_t kTapBlocks = 50;  // 500 ms per audio bus tap
@@ -81,6 +82,10 @@ struct Session::Input {
     // the effects alive and is changed under the session control mutex.
     std::array<std::atomic<audio::Vst3Effect*>, Session::kInsertSlots> inserts{};
     std::array<std::unique_ptr<audio::Vst3Effect>, Session::kInsertSlots> insert_owned;
+    // Instant replay recording of this input (M6): the output thread feeds
+    // `replay`; `replay_owned` (control) keeps it alive, shared with replay inputs.
+    std::atomic<replay::ReplayBuffer*> replay{nullptr};
+    std::shared_ptr<replay::ReplayBuffer> replay_owned;
     bool click_active = false;        // audio thread only
     std::atomic<std::int64_t> last_click_ns{0};
     std::atomic<std::uint64_t> click_seq{0};

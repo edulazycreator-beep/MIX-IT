@@ -492,6 +492,7 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_set_program_input(mixit_session 
 
 #define MIXIT_BUS_PROGRAM 0
 #define MIXIT_BUS_PREVIEW 1
+#define MIXIT_BUS_MULTIVIEW 2   /* API 0.6: read-only; rendered while it is read or recorded */
 
 #define MIXIT_TRANSITION_CUT  0
 #define MIXIT_TRANSITION_MIX  1   /* cross-dissolve */
@@ -529,6 +530,13 @@ typedef struct mixit_layer_config {
  * air across cuts. Content any time; shown/hidden with a fade. A visible
  * overlay counts as "on program" for audio-follows-video. */
 #define MIXIT_OVERLAY_CHANNELS 4
+
+/* Multiview (API 0.6): mixit_session_copy_bus_frame(MIXIT_BUS_MULTIVIEW)
+ * shows preview and program on top and the first 8 video inputs below, with
+ * labels and tally borders (red = program, green = preview). Labels default
+ * to "Input N"; set them here (<= 128 bytes UTF-8, "" = default). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_input_label(mixit_session session, uint32_t input_id,
+                                                                 const char* label);
 
 MIXIT_API mixit_result MIXIT_CALL mixit_session_set_overlay(mixit_session session, uint32_t channel,
                                                              const mixit_layer_config* layer);
@@ -936,6 +944,7 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_get_audio_insert_state(mixit_ses
  * (up to the next keyframe, counted) or reconnects; it never blocks the
  * session or other destinations. */
 
+#define MIXIT_OUTPUT_SOURCE_MULTIVIEW 0xFFFFu /* API 0.6: source_input for recording/streaming the multiview */
 #define MIXIT_OUTPUT_FLAG_NOT_FRAGMENTED 0x1u /* MP4/MOV: classic layout (not playable after a crash) */
 #define MIXIT_OUTPUT_FLAG_NO_RECONNECT   0x2u /* network: fail instead of retrying */
 
@@ -1063,6 +1072,55 @@ typedef struct mixit_graphics_info {
 
 MIXIT_API mixit_result MIXIT_CALL mixit_session_get_graphics_info(mixit_session session, uint32_t input_id,
                                                                    mixit_graphics_info* out_info);
+
+/* ---- Instant replay (API 0.6, M6) ---------------------------------------
+ * An input's replay buffer keeps its last N seconds as JPEG frames in memory
+ * (stamped with session master time: mixit_get_monotonic_time_ns() and
+ * mixit_video_frame_info.tick_pts_ns use the same clock). A replay input
+ * plays a buffer from any time at 0.1x..2x (slow motion repeats frames).
+ * Video only. */
+
+/* Any time; seconds 5..600 enables (replacing any buffer), 0 disables;
+ * quality = JPEG qscale 2 (best) .. 31 (try 4). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_enable_replay(mixit_session session, uint32_t input_id, uint32_t seconds,
+                                                               uint32_t quality);
+
+typedef struct mixit_replay_buffer_info {
+    uint32_t struct_size;
+    uint32_t width;
+    uint32_t height;
+    uint32_t reserved;
+    int64_t  oldest_ns;    /* master time of the oldest / newest frame kept */
+    int64_t  newest_ns;
+    uint64_t frames;
+    uint64_t bytes;
+    uint64_t dropped;      /* frames not recorded (encoder behind) */
+} mixit_replay_buffer_info;
+
+/* INVALID_STATE when replay is not enabled for the input. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_replay_buffer(mixit_session session, uint32_t input_id,
+                                                                   mixit_replay_buffer_info* out_info);
+/* Only while not RUNNING: an input that plays `source_input_id`'s buffer
+ * (enable replay on it first). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_replay_source(mixit_session session, uint32_t source_input_id,
+                                                                   uint32_t* out_input_id);
+/* Starts playback at buffer time from_ns (before the oldest frame = oldest). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_replay_play(mixit_session session, uint32_t replay_input_id,
+                                                             int64_t from_ns, float speed, int32_t paused);
+/* speed <= 0 keeps the speed; paused < 0 keeps the pause state. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_replay_control(mixit_session session, uint32_t replay_input_id,
+                                                                float speed, int32_t paused);
+
+typedef struct mixit_replay_state {
+    uint32_t struct_size;
+    int32_t  active;       /* play() was called */
+    int32_t  paused;
+    float    speed;
+    int64_t  position_ns;  /* buffer time being shown */
+} mixit_replay_state;
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_replay_state(mixit_session session, uint32_t replay_input_id,
+                                                                  mixit_replay_state* out_state);
 
 #ifdef __cplusplus
 } /* extern "C" */

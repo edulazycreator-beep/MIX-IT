@@ -16,7 +16,8 @@ namespace MixIt.Desktop;
 internal static class SelfTest
 {
     public static async Task RunProductionAsync(Task engineStart, ProductionViewModel vm, AudioMixerViewModel mixer,
-        OutputsViewModel outputs, GraphicsViewModel graphics, ProductionService production, ILogger logger, Application app)
+        OutputsViewModel outputs, GraphicsViewModel graphics, ReplayViewModel replay, ProductionService production, ILogger logger,
+        Application app)
     {
         var failures = new List<string>();
         try
@@ -140,6 +141,36 @@ internal static class SelfTest
             }
             if (graphics.Error is not null) failures.Add($"graphics error shown: {graphics.Error}");
             graphics.IsActive = false;
+
+            // Replay & Multiview: the multiview monitor runs; a replay of input 1
+            // records, is marked and plays back at 50 %.
+            replay.IsActive = true;
+            replay.Source = replay.Sources.First(s => s.InputId == vm.Inputs[0].Id);
+            replay.Seconds = 15;
+            replay.AddReplayCommand.Execute(null);
+            ReplayItemViewModel? item = replay.Items.LastOrDefault();
+            if (item is null || replay.Error is not null)
+            {
+                failures.Add($"could not add a replay: {replay.Error}");
+            }
+            else
+            {
+                await vm.ToggleProductionAsync();
+                await Task.Delay(1500);
+                item.MarkCommand.Execute(null);
+                await Task.Delay(300);
+                item.PlayMarkCommand.Execute(null);
+                await Task.Delay(700);
+                ReplayStatus rs = production.GetReplayStatus(item.Id);
+                if (replay.Multiview.FramesShown < 10) failures.Add($"multiview monitor showed {replay.Multiview.FramesShown} frames");
+                if (rs.Buffer.Frames < 20) failures.Add($"replay buffer holds {rs.Buffer.Frames} frames");
+                if (!rs.State.Active || Math.Abs(rs.State.Speed - 0.5f) > 1e-3) failures.Add("replay is not playing at 50 %");
+                logger.LogInformation("Self-test replay: multiview {Frames} frames, buffer {BufferFrames} frames / {Bytes} bytes",
+                    replay.Multiview.FramesShown, rs.Buffer.Frames, rs.Buffer.Bytes);
+                await vm.ToggleProductionAsync();
+            }
+            if (replay.Error is not null) failures.Add($"replay error shown: {replay.Error}");
+            replay.IsActive = false;
 
             logger.LogInformation(
                 "Self-test production details: monitors {Program}/{Preview} frames, ticks {Ticks}, late {Late}, composited {Composited}, compositor {Compositor}",

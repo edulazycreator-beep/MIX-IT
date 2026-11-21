@@ -1,5 +1,6 @@
 #include "media/session.hpp"
 #include "media/graphics_source.hpp"
+#include "replay/replay.hpp"
 #include "media/session_internal.hpp"
 
 #include <algorithm>
@@ -180,11 +181,13 @@ Status Session::remove_input(std::uint32_t input_id) {
     // Release any bus frames that may reference this input's pool.
     program_out_.clear();
     preview_out_.clear();
+    multiview_out_.clear();
     reset_audio_runtime();
     {
         std::lock_guard consumer(consumer_mutex_);
         program_cache_ = ProgramFrame{};
         preview_cache_ = ProgramFrame{};
+        multiview_cache_ = ProgramFrame{};
     }
     inputs_.erase(it);
     {
@@ -398,6 +401,7 @@ void Session::stop_threads() noexcept {
     for (auto& in : inputs_) in->reset_runtime_state();
     program_out_.clear();
     preview_out_.clear();
+    multiview_out_.clear();
     {
         std::lock_guard scenes(scene_mutex_);
         if (transition_.active) {  // stopping mid-transition: land on the end state
@@ -409,6 +413,7 @@ void Session::stop_threads() noexcept {
     std::lock_guard consumer(consumer_mutex_);
     program_cache_ = ProgramFrame{};
     preview_cache_ = ProgramFrame{};
+    multiview_cache_ = ProgramFrame{};
 }
 
 Status Session::stop() {
@@ -585,8 +590,12 @@ void Session::output_loop() noexcept {
         BusScene preview_scene;
         Transition tr;
         std::array<LayerConfig, kOverlayChannels> overlay_layers{};
+        const bool multiview_wanted = now - multiview_requested_ns_.load(std::memory_order_relaxed) < 1'000'000'000 ||
+                                      outputs_->wants(kMultiviewSource);
+        std::map<std::uint32_t, std::string> labels;
         {
             std::lock_guard scenes(scene_mutex_);
+            if (multiview_wanted) labels = labels_;
             program_scene = program_scene_;
             preview_scene = preview_scene_;
             const std::int64_t ticks_elapsed = previous_n < 0 ? 1 : std::max<std::int64_t>(1, n - previous_n);
@@ -640,16 +649,31 @@ void Session::output_loop() noexcept {
         if (out.info.input_id == 0 && !tr.active) program_black_frames_.fetch_add(1, std::memory_order_relaxed);
         program_frames_.fetch_add(1, std::memory_order_relaxed);
         if (out.frame && outputs_->wants(0)) outputs_->feed_video(0, out.frame, static_cast<std::uint64_t>(n));
-        for (auto& in : inputs_) {  // ISO recordings take each input's frame of this tick
+        for (auto& in : inputs_) {  // ISO recordings and replay buffers take each input's frame of this tick
             if (in->current && outputs_->wants(in->id)) outputs_->feed_video(in->id, in->current, static_cast<std::uint64_t>(n));
+            if (replay::ReplayBuffer* r = in->replay.load(std::memory_order_acquire); r != nullptr && in->current) {
+                r->feed(in->current, target);
+            }
         }
+        const VideoRef program_frame = out.frame;
         (void)program_out_.push(std::move(out));
 
-        // Preview is rendered only while someone is watching it.
-        if (now - preview_requested_ns_.load(std::memory_order_relaxed) < 1'000'000'000) {
+        // Preview is rendered only while someone is watching it (or the multiview).
+        VideoRef preview_frame;
+        if (multiview_wanted || now - preview_requested_ns_.load(std::memory_order_relaxed) < 1'000'000'000) {
             ProgramFrame pv;
             render_bus(preview_scene, nullptr, TransitionKind::Cut, 0.0f, target, static_cast<std::uint64_t>(n), pv);
+            preview_frame = pv.frame;
             (void)preview_out_.push(std::move(pv));
+        }
+        if (multiview_wanted) {
+            ProgramFrame mv;
+            render_multiview(program_frame, preview_frame, program_scene.base_input, preview_scene.base_input, labels, target,
+                             static_cast<std::uint64_t>(n), mv);
+            if (mv.frame && outputs_->wants(kMultiviewSource)) {
+                outputs_->feed_video(kMultiviewSource, mv.frame, static_cast<std::uint64_t>(n));
+            }
+            (void)multiview_out_.push(std::move(mv));
         }
 
         previous_n = n;
@@ -731,18 +755,21 @@ Status Session::input_stats(std::uint32_t input_id, InputStats& out) const {
 
 Status Session::copy_bus_frame(Bus bus, std::uint8_t* dest, std::size_t dest_size, std::uint32_t dest_stride,
                                ProgramFrameInfo& info) {
-    if (bus != Bus::Program && bus != Bus::Preview) return {MIXIT_E_INVALID_ARGUMENT, "unknown bus"};
+    if (bus != Bus::Program && bus != Bus::Preview && bus != Bus::Multiview) return {MIXIT_E_INVALID_ARGUMENT, "unknown bus"};
     if (bus == Bus::Preview) {
         preview_requested_ns_.store(static_cast<std::int64_t>(monotonic_ns()), std::memory_order_relaxed);
     }
+    if (bus == Bus::Multiview) {
+        multiview_requested_ns_.store(static_cast<std::int64_t>(monotonic_ns()), std::memory_order_relaxed);
+    }
     std::lock_guard consumer(consumer_mutex_);
-    MediaQueue<ProgramFrame>& queue = bus == Bus::Program ? program_out_ : preview_out_;
-    ProgramFrame& cache = bus == Bus::Program ? program_cache_ : preview_cache_;
+    MediaQueue<ProgramFrame>& queue = bus == Bus::Program ? program_out_ : bus == Bus::Preview ? preview_out_ : multiview_out_;
+    ProgramFrame& cache = bus == Bus::Program ? program_cache_ : bus == Bus::Preview ? preview_cache_ : multiview_cache_;
     ProgramFrame latest;
     while (queue.pop(latest)) cache = std::move(latest);
     if (!cache.frame) {
         return {MIXIT_E_NOT_FOUND, bus == Bus::Program ? "no program frame has been produced yet"
-                                                       : "no preview frame yet (preview renders while it is being read)"};
+                                                       : "no frame yet (preview and multiview render while they are being read)"};
     }
 
     const VideoFrame& f = *cache.frame;
@@ -769,6 +796,197 @@ std::uint32_t Session::pooled_items_in_use() const {
     if (black_frame_) --total;  // the black frame is a permanent session resource
     for (const auto& in : inputs_) total += in->video_pool.pool().in_use() + in->audio_pool.pool().in_use();
     return total;
+}
+
+Status Session::set_input_label(std::uint32_t input_id, const std::string& label) {
+    if (label.size() > 128) return {MIXIT_E_INVALID_ARGUMENT, "label longer than 128 bytes"};
+    std::lock_guard lock(control_mutex_);
+    if (find_input(input_id) == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(input_id)};
+    std::lock_guard scenes(scene_mutex_);
+    if (label.empty()) {
+        labels_.erase(input_id);
+    } else {
+        labels_[input_id] = label;
+    }
+    return Status::ok();
+}
+
+void Session::render_multiview(const VideoRef& program, const VideoRef& preview, std::uint32_t program_id,
+                               std::uint32_t preview_id, const std::map<std::uint32_t, std::string>& labels,
+                               std::int64_t target, std::uint64_t tick, ProgramFrame& out) noexcept {
+    out.info.tick_pts_ns = target;
+    out.info.tick_index = tick;
+    out.info.width = config_.width;
+    out.info.height = config_.height;
+    out.frame = program_pool_->acquire();
+    if (!out.frame) {
+        program_pool_exhausted_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const auto W = static_cast<float>(config_.width), H = static_cast<float>(config_.height);
+    struct Tile {
+        NormRect rect;
+        const VideoFrame* frame;
+        std::uint32_t input_id;  // 0 for preview/program tiles
+        const char* title;
+    };
+    std::vector<Tile> tiles;
+    tiles.push_back({{0.0f, 0.0f, 0.5f, 0.5f}, preview ? &*preview : nullptr, 0, "PREVIEW"});
+    tiles.push_back({{0.5f, 0.0f, 0.5f, 0.5f}, program ? &*program : nullptr, 0, "PROGRAM"});
+    std::uint32_t slot = 0;
+    for (const auto& in : inputs_) {
+        if (slot >= kMultiviewInputs || !in->source->format().has_video) continue;
+        tiles.push_back({{static_cast<float>(slot % 4) * 0.25f, 0.5f + static_cast<float>(slot / 4) * 0.25f, 0.25f, 0.25f},
+                         in->current ? &*in->current : nullptr, in->id, nullptr});
+        ++slot;
+    }
+    auto fit_in = [&](const NormRect& tile, const VideoFrame& f) {
+        const NormRect r = fit_rect(f.width, f.height, static_cast<std::uint32_t>(tile.w * W), static_cast<std::uint32_t>(tile.h * H));
+        return NormRect{tile.x + r.x * tile.w, tile.y + r.y * tile.h, r.w * tile.w, r.h * tile.h};
+    };
+    SceneDraw base, top;
+    for (const Tile& t : tiles) {
+        if (t.frame == nullptr) continue;
+        SceneDraw& d = base.count < base.layers.size() ? base : top;
+        if (d.count >= d.layers.size()) break;
+        LayerDraw& l = d.layers[d.count++];
+        l.frame = t.frame;
+        l.dest = fit_in(t.rect, *t.frame);
+    }
+
+    // Labels and tally borders: re-rendered only when they change.
+    std::string key = std::to_string(program_id) + "/" + std::to_string(preview_id);
+    for (const Tile& t : tiles) {
+        key += "|" + std::to_string(t.input_id);
+        if (const auto it = labels.find(t.input_id); it != labels.end()) key += ":" + it->second;
+    }
+    if (key != mv_labels_key_ || !mv_labels_) {
+        if (!mv_renderer_) (void)graphics::Renderer::create(mv_renderer_);
+        if (!mv_label_pool_) {
+            try {
+                mv_label_pool_ = std::make_unique<VideoFramePool>(config_.width, config_.height, 2);
+            } catch (...) {
+            }
+        }
+        VideoRef labels_frame = mv_label_pool_ ? mv_label_pool_->acquire() : VideoRef{};
+        if (mv_renderer_ && labels_frame) {
+            graphics::Scene scene;
+            const float bar = 0.035f, border = std::max(2.0f / H, 0.004f);
+            auto rect = [&](float x, float y, float w, float h, graphics::Color c) {
+                graphics::Element e;
+                e.type = graphics::ElementType::Rect;
+                e.x = x;
+                e.y = y;
+                e.w = w;
+                e.h = h;
+                e.color = c;
+                scene.elements.push_back(e);
+            };
+            const graphics::Color red{0.86f, 0.12f, 0.12f, 1.0f}, green{0.12f, 0.72f, 0.28f, 1.0f}, grid{0.25f, 0.25f, 0.28f, 1.0f};
+            for (const Tile& t : tiles) {
+                const NormRect& r = t.rect;
+                graphics::Color edge = grid;
+                if (std::string_view(t.title != nullptr ? t.title : "") == "PROGRAM" || (t.input_id != 0 && t.input_id == program_id)) edge = red;
+                else if (std::string_view(t.title != nullptr ? t.title : "") == "PREVIEW" || (t.input_id != 0 && t.input_id == preview_id)) edge = green;
+                const float bw = edge.r == grid.r ? border / 2 : border;
+                rect(r.x, r.y, r.w, bw, edge);
+                rect(r.x, r.y + r.h - bw, r.w, bw, edge);
+                rect(r.x, r.y, bw * H / W, r.h, edge);
+                rect(r.x + r.w - bw * H / W, r.y, bw * H / W, r.h, edge);
+                rect(r.x + bw, r.y + r.h - bar - bw, r.w - 2 * bw, bar, graphics::Color{0, 0, 0, 0.65f});
+                std::string text;
+                if (t.title != nullptr) {
+                    const std::uint32_t id = std::string_view(t.title) == "PROGRAM" ? program_id : preview_id;
+                    text = t.title;
+                    if (id != 0) {
+                        const auto it = labels.find(id);
+                        text += " — " + (it != labels.end() ? it->second : "Input " + std::to_string(id));
+                    }
+                } else {
+                    const auto it = labels.find(t.input_id);
+                    text = it != labels.end() ? it->second : "Input " + std::to_string(t.input_id);
+                }
+                graphics::Element e;
+                e.type = graphics::ElementType::Text;
+                e.x = r.x + 0.01f;
+                e.y = r.y + r.h - bar - bw;
+                e.w = r.w - 0.02f;
+                e.h = bar;
+                e.text = text;
+                e.size = bar * 0.7f;
+                e.align = graphics::HAlign::Center;
+                e.color = graphics::Color{1, 1, 1, 1};
+                scene.elements.push_back(e);
+            }
+            std::vector<std::string> warnings;
+            if (mv_renderer_->render(scene, {}, {}, *labels_frame, warnings).is_ok()) {
+                mv_labels_ = std::move(labels_frame);
+                mv_labels_key_ = key;
+            }
+        }
+    }
+    if (mv_labels_ && top.count < top.layers.size()) {
+        LayerDraw& l = top.layers[top.count++];
+        l.frame = &*mv_labels_;
+    }
+    Status st = compositor_->render(base, nullptr, TransitionKind::Cut, 0.0f, *out.frame, top.count > 0 ? &top : nullptr);
+    if (!st.is_ok()) out.frame = black_frame_;
+}
+
+// ---- instant replay ------------------------------------------------------------
+
+Status Session::enable_replay(std::uint32_t input_id, std::uint32_t seconds, std::uint32_t quality) {
+    std::shared_ptr<replay::ReplayBuffer> buffer;
+    if (seconds != 0) {
+        if (Status st = replay::ReplayBuffer::create(seconds, quality, logger_, buffer); !st.is_ok()) return st;
+    }
+    std::lock_guard lock(control_mutex_);
+    Input* in = find_input(input_id);
+    if (in == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(input_id)};
+    if (!in->source->format().has_video) return {MIXIT_E_INVALID_ARGUMENT, "replay needs an input with video"};
+    if (dynamic_cast<replay::ReplaySource*>(in->source.get()) != nullptr) {
+        return {MIXIT_E_INVALID_ARGUMENT, "a replay input cannot itself be recorded for replay"};
+    }
+    in->replay.store(buffer.get(), std::memory_order_seq_cst);
+    wait_feed_quiescent();  // the output thread no longer feeds the old buffer
+    // Replay inputs keep their own reference to an old buffer.
+    in->replay_owned = std::move(buffer);
+    logger_.logf(MIXIT_LOG_INFO, "session", "input {}: replay {}", input_id,
+                 seconds == 0 ? std::string("off") : std::to_string(seconds) + " s, quality " + std::to_string(quality));
+    return Status::ok();
+}
+
+Status Session::replay_buffer_info(std::uint32_t input_id, replay::BufferInfo& out) const {
+    std::lock_guard lock(control_mutex_);
+    const Input* in = find_input(input_id);
+    if (in == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(input_id)};
+    if (!in->replay_owned) return {MIXIT_E_INVALID_STATE, "replay is not enabled for this input"};
+    out = in->replay_owned->info();
+    return Status::ok();
+}
+
+Status Session::add_replay_source(std::uint32_t source_input_id, std::uint32_t& out_input_id) {
+    std::shared_ptr<replay::ReplayBuffer> buffer;
+    std::uint32_t w = 0, h = 0;
+    {
+        std::lock_guard lock(control_mutex_);
+        const Input* in = find_input(source_input_id);
+        if (in == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(source_input_id)};
+        if (!in->replay_owned) return {MIXIT_E_INVALID_STATE, "enable replay on the input first"};
+        buffer = in->replay_owned;
+        w = in->source->format().width;
+        h = in->source->format().height;
+    }
+    return add_source(std::make_unique<replay::ReplaySource>(buffer, w, h, source_input_id), out_input_id);
+}
+
+Status Session::with_replay(std::uint32_t replay_input_id, const std::function<Status(replay::ReplaySource&)>& fn) const {
+    std::lock_guard lock(control_mutex_);
+    const Input* in = find_input(replay_input_id);
+    if (in == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(replay_input_id)};
+    auto* r = dynamic_cast<replay::ReplaySource*>(in->source.get());
+    if (r == nullptr) return {MIXIT_E_INVALID_ARGUMENT, "input " + std::to_string(replay_input_id) + " is not a replay input"};
+    return fn(*r);
 }
 
 }  // namespace mixit::media

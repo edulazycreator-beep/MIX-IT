@@ -546,3 +546,39 @@ TEST(Graphics, LowerThirdOnAnOverlayWithLiveFieldsAndTimer) {
     EXPECT_NE(std::string(info.warnings).find("logo.png"), std::string::npos) << "missing image reported";
 }
 #endif
+
+TEST(Buses, MultiviewShowsPreviewProgramInputsAndTally) {
+    Studio s;
+    ASSERT_EQ(mixit_session_set_program_input(s.session, s.a), MIXIT_OK);
+    ASSERT_EQ(mixit_session_set_preview_input(s.session, s.b), MIXIT_OK);
+    ASSERT_EQ(mixit_session_set_input_label(s.session, s.a, "Camera 1"), MIXIT_OK);
+    EXPECT_EQ(mixit_session_set_input_label(s.session, 99, "x"), MIXIT_E_NOT_FOUND);
+    ASSERT_EQ(mixit_session_start(s.session), MIXIT_OK);
+    std::optional<std::vector<uint8_t>> mv;
+    for (int i = 0; i < 20; ++i) {  // rendered from the first read on
+        mv = s.frame(MIXIT_BUS_MULTIVIEW);
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    }
+    ASSERT_TRUE(mv.has_value());
+    auto tile_source = [&](uint32_t x, uint32_t y, uint32_t w, uint32_t h) -> uint32_t {
+        const auto c = mixit::media::decode_frame_code(mv->data() + (y * W + x) * 4, W * 4, w, h);
+        return c ? c->source_id : 0u;
+    };
+    EXPECT_EQ(tile_source(W / 2, 0, W / 2, H / 2), s.a) << "program top right";
+    EXPECT_EQ(tile_source(0, 0, W / 2, H / 2), s.b) << "preview top left";
+    auto px = [&](uint32_t x, uint32_t y) {
+        const uint8_t* p = mv->data() + (y * W + x) * 4;
+        return std::array<int, 3>{p[2], p[1], p[0]};  // r, g, b
+    };
+    const auto program_edge = px(W / 2 + 40, 0);
+    EXPECT_GT(program_edge[0], 180) << "red tally border on program";
+    EXPECT_LT(program_edge[1], 80);
+    const auto preview_edge = px(40, 0);
+    EXPECT_GT(preview_edge[1], 150) << "green tally border on preview";
+    EXPECT_LT(preview_edge[0], 80);
+    // Label bars hold white text in the bottom tiles.
+    int white = 0;
+    for (uint32_t y = H * 3 / 4 - H / 28; y < H * 3 / 4; ++y)
+        for (uint32_t x = 0; x < W / 4; ++x) white += px(x, y)[0] > 200 && px(x, y)[1] > 200 ? 1 : 0;
+    EXPECT_GT(white, 20) << "label of input 1";
+}

@@ -13,6 +13,9 @@ public sealed record KeyChoice(string Title, KeySettings Key);
 
 public sealed record InputChoice(uint? InputId, string Title);
 
+/// <summary>Where an overlay channel draws its input (virtual sets: a keyed presenter over a background).</summary>
+public sealed record PlacementChoice(string Title, NormalizedRect Destination);
+
 /// <summary>
 /// Graphics Studio (M6): titles from templates with live fields and timers,
 /// and the four overlay channels (downstream keys) that put graphics, logos
@@ -34,6 +37,15 @@ public sealed class GraphicsViewModel : ObservableObject
         new("Green screen", KeySettings.GreenScreen),
         new("Blue screen", KeySettings.BlueScreen),
         new("Luma (black out)", new KeySettings { Type = KeyType.Luma, Threshold = 0.08f, Softness = 0.06f }),
+    ];
+
+    public static IReadOnlyList<PlacementChoice> Placements { get; } =
+    [
+        new("Full frame", NormalizedRect.Full),
+        new("Presenter left", new NormalizedRect(0.02f, 0.15f, 0.62f, 0.85f)),
+        new("Presenter right", new NormalizedRect(0.36f, 0.15f, 0.62f, 0.85f)),
+        new("Presenter centre", new NormalizedRect(0.19f, 0.10f, 0.62f, 0.90f)),
+        new("Corner box", new NormalizedRect(0.64f, 0.06f, 0.32f, 0.32f)),
     ];
 
     public GraphicsViewModel(ProductionService production, ILogger<GraphicsViewModel> logger)
@@ -235,6 +247,7 @@ public sealed class OverlayChannelViewModel : ObservableObject
     private readonly GraphicsViewModel _owner;
     private InputChoice? _input;
     private KeyChoice _key = GraphicsViewModel.Keys[0];
+    private PlacementChoice _placement = GraphicsViewModel.Placements[0];
     private int _fadeFrames = 15;
     private string _state = "";
     private bool _onAir;
@@ -253,6 +266,7 @@ public sealed class OverlayChannelViewModel : ObservableObject
     public string Title => $"Overlay {Channel + 1}";
     public ObservableCollection<InputChoice> Inputs => _owner.InputChoices;
     public IReadOnlyList<KeyChoice> Keys => GraphicsViewModel.Keys;
+    public IReadOnlyList<PlacementChoice> Placements => GraphicsViewModel.Placements;
     public ICommand InCommand { get; }
     public ICommand OutCommand { get; }
     public ICommand CutCommand { get; }
@@ -262,7 +276,10 @@ public sealed class OverlayChannelViewModel : ObservableObject
         get => _input;
         set
         {
-            if (!SetProperty(ref _input, value) || _syncing) return;
+            // null comes from the ComboBox while the choices are being rebuilt
+            // (the "(empty)" choice is an InputChoice with a null id): ignore it,
+            // or a list refresh would clear the channel on air.
+            if (value is null || !SetProperty(ref _input, value) || _syncing) return;
             Apply();
         }
     }
@@ -273,6 +290,16 @@ public sealed class OverlayChannelViewModel : ObservableObject
         set
         {
             if (value is null || !SetProperty(ref _key, value) || _syncing) return;
+            Apply();
+        }
+    }
+
+    public PlacementChoice Placement
+    {
+        get => _placement;
+        set
+        {
+            if (value is null || !SetProperty(ref _placement, value) || _syncing) return;
             Apply();
         }
     }
@@ -295,7 +322,8 @@ public sealed class OverlayChannelViewModel : ObservableObject
         private set => SetProperty(ref _onAir, value);
     }
 
-    private void Apply() => _owner.Guard(() => _owner.Production.SetOverlay(Channel, _input?.InputId, _key.Key));
+    private void Apply() =>
+        _owner.Guard(() => _owner.Production.SetOverlay(Channel, _input?.InputId, _key.Key, _placement.Destination));
 
     internal void Refresh()
     {
@@ -305,6 +333,8 @@ public sealed class OverlayChannelViewModel : ObservableObject
             (uint? id, KeySettings key, _) = _owner.Production.GetOverlay(Channel);
             Input = Inputs.FirstOrDefault(i => i.InputId == id) ?? Inputs.FirstOrDefault();
             Key = Keys.FirstOrDefault(k => k.Key == key) ?? Keys[0];
+            NormalizedRect dest = _owner.Production.GetOverlayDestination(Channel);
+            Placement = Placements.FirstOrDefault(p => p.Destination == dest) ?? Placements[0];
         }
         catch (Exception ex) when (ex is MixItNativeException or InvalidOperationException or ArgumentException)
         {

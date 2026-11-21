@@ -440,3 +440,92 @@ TEST(Outputs, RedactsStreamKeysAndPasswords) {
     EXPECT_EQ(redact_url("rtmp://user:pass@host/app/key"), "rtmp://***@host/app/***");
     EXPECT_EQ(redact_url("C:\\Recordings\\show.mp4"), "C:\\Recordings\\show.mp4");
 }
+
+TEST(Outputs, RecordsTheMultiview) {
+    if (!ffmpeg_usable()) GTEST_SKIP() << "FFmpeg not available";
+    Studio s;
+    const fs::path file = temp_dir("multiview") / "multiview.mkv";
+    const uint32_t o = s.add_output(str(file), MIXIT_OUTPUT_SOURCE_MULTIVIEW);
+    ASSERT_EQ(mixit_session_start(s.session), MIXIT_OK);
+    ASSERT_EQ(mixit_session_start_output(s.session, o), MIXIT_OK) << last_error();
+    sleep_ms(2500);
+    const mixit_output_stats st = s.stats(o);
+    mixit_session_stats ss{};
+    ss.struct_size = sizeof(ss);
+    ASSERT_EQ(mixit_session_get_stats(s.session, &ss), MIXIT_OK);
+    ASSERT_EQ(mixit_session_stop(s.session), MIXIT_OK);
+    const DecodedMedia m = decode_media(str(file));
+    ASSERT_TRUE(m.error.empty()) << m.error;
+    EXPECT_EQ(m.width, 640);
+    EXPECT_EQ(m.decode_errors, 0);
+    // Slow (sanitizer) builds cannot render the multiview at 30 fps: the session
+    // skips ticks (counted) and the encoder may drop frames (counted).
+    EXPECT_GT(m.frame_times.size() + st.encoder_dropped_frames + ss.skipped_ticks, 50u)
+        << "skipped ticks " << ss.skipped_ticks << ", late " << ss.late_ticks;
+    EXPECT_GT(m.frame_times.size(), 10u);
+    EXPECT_GT(m.audio.size(), 48000u) << "with program audio";
+}
+
+// Instant replay (M6): record an input, play it back in slow motion on the
+// program and verify the flash cadence (every 0.5 s live) doubles to 1 s.
+TEST(Replay, SlowMotionPlaybackOfARecordedInput) {
+    if (!ffmpeg_usable()) GTEST_SKIP() << "FFmpeg not available";
+    Studio s;
+    mixit_replay_buffer_info bi{};
+    bi.struct_size = sizeof(bi);
+    uint32_t r = 0;
+    EXPECT_EQ(mixit_session_add_replay_source(s.session, s.a, &r), MIXIT_E_INVALID_STATE) << "replay not enabled yet";
+    EXPECT_EQ(mixit_session_get_replay_buffer(s.session, s.a, &bi), MIXIT_E_INVALID_STATE);
+    EXPECT_EQ(mixit_session_enable_replay(s.session, s.a, 2, 4), MIXIT_E_INVALID_ARGUMENT) << "too short";
+    EXPECT_EQ(mixit_session_enable_replay(s.session, s.a, 30, 40), MIXIT_E_INVALID_ARGUMENT) << "bad quality";
+    EXPECT_EQ(mixit_session_enable_replay(s.session, 999, 30, 4), MIXIT_E_NOT_FOUND);
+    ASSERT_EQ(mixit_session_enable_replay(s.session, s.a, 30, 4), MIXIT_OK) << last_error();
+    ASSERT_EQ(mixit_session_add_replay_source(s.session, s.a, &r), MIXIT_OK) << last_error();
+    EXPECT_EQ(mixit_session_enable_replay(s.session, r, 30, 4), MIXIT_E_INVALID_ARGUMENT) << "replay of a replay";
+    EXPECT_EQ(mixit_session_replay_play(s.session, s.a, 0, 1.0f, 0), MIXIT_E_INVALID_ARGUMENT) << "not a replay input";
+    EXPECT_EQ(mixit_session_replay_play(s.session, r, 0, 3.0f, 0), MIXIT_E_INVALID_ARGUMENT) << "speed out of range";
+
+    ASSERT_EQ(mixit_session_start(s.session), MIXIT_OK);
+    sleep_ms(3000);
+    ASSERT_EQ(mixit_session_get_replay_buffer(s.session, s.a, &bi), MIXIT_OK) << last_error();
+    EXPECT_EQ(bi.width, 640u);
+    EXPECT_GT(bi.frames, 60u);
+    EXPECT_GT(bi.bytes, 0u);
+    EXPECT_GT(bi.newest_ns - bi.oldest_ns, 2'000'000'000);
+    uint32_t late = 0;
+    EXPECT_EQ(mixit_session_add_replay_source(s.session, s.a, &late), MIXIT_E_INVALID_STATE) << "only while stopped";
+
+    const fs::path file = temp_dir("replay") / "replay.mkv";
+    const uint32_t o = s.add_output(str(file));
+    ASSERT_EQ(mixit_session_replay_play(s.session, r, bi.oldest_ns, 0.5f, 0), MIXIT_OK) << last_error();
+    ASSERT_EQ(mixit_session_set_program_input(s.session, r), MIXIT_OK);
+    sleep_ms(200);
+    ASSERT_EQ(mixit_session_start_output(s.session, o), MIXIT_OK) << last_error();
+    sleep_ms(3500);
+
+    mixit_replay_state st{};
+    st.struct_size = sizeof(st);
+    ASSERT_EQ(mixit_session_get_replay_state(s.session, r, &st), MIXIT_OK) << last_error();
+    EXPECT_EQ(st.active, 1);
+    EXPECT_FLOAT_EQ(st.speed, 0.5f);
+    const double advanced = static_cast<double>(st.position_ns - bi.oldest_ns) / 1e9;
+    EXPECT_NEAR(advanced, 0.5 * 3.7, 0.3) << "half speed";
+
+    ASSERT_EQ(mixit_session_replay_control(s.session, r, 0.0f, 1), MIXIT_OK);  // pause, keep speed
+    ASSERT_EQ(mixit_session_get_replay_state(s.session, r, &st), MIXIT_OK);
+    const int64_t held = st.position_ns;
+    sleep_ms(300);
+    ASSERT_EQ(mixit_session_get_replay_state(s.session, r, &st), MIXIT_OK);
+    EXPECT_EQ(st.paused, 1);
+    EXPECT_EQ(st.position_ns, held);
+    EXPECT_FLOAT_EQ(st.speed, 0.5f);
+    ASSERT_EQ(mixit_session_stop(s.session), MIXIT_OK);
+
+    const DecodedMedia m = decode_media(str(file));
+    ASSERT_TRUE(m.error.empty()) << m.error;
+    const std::vector<double> flashes = flash_times(m);
+    ASSERT_GE(flashes.size(), 3u) << "replayed flashes";
+    for (std::size_t i = 1; i + 1 < flashes.size(); ++i) {  // the last may be cut by the pause
+        EXPECT_NEAR(flashes[i] - flashes[i - 1], 1.0, 0.15) << "flash " << i;
+    }
+}

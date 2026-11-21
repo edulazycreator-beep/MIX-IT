@@ -16,6 +16,7 @@ static_assert(offsetof(mixit_output_stats, duration_ns) == 72);
 static_assert(offsetof(mixit_output_stats, encoder) == 88);
 static_assert(sizeof(mixit_video_encoder_info) == 360);
 static_assert(MIXIT_OUTPUT_FAILED == static_cast<int>(mixit::output::OutputState::Failed));
+static_assert(MIXIT_OUTPUT_SOURCE_MULTIVIEW == mixit::media::Session::kMultiviewSource);
 
 namespace {
 

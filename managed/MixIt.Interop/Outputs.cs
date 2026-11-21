@@ -9,8 +9,14 @@ public sealed record OutputSettings
     /// <summary>null = from the url; else mp4, mov, matroska, mpegts, flv, hls.</summary>
     public string? Format { get; init; }
 
-    /// <summary>0 = program; otherwise an input id (ISO recording at the input's own size).</summary>
+    /// <summary>
+    /// 0 = program; <see cref="MultiviewSource"/> = the multiview with program audio;
+    /// otherwise an input id (ISO recording at the input's own size).
+    /// </summary>
     public uint SourceInputId { get; init; }
+
+    /// <summary>Mirrors MIXIT_OUTPUT_SOURCE_MULTIVIEW.</summary>
+    public const uint MultiviewSource = 0xFFFF;
 
     /// <summary>null = automatic (hardware first); else an encoder name from <see cref="VideoEncoderInfo"/>.</summary>
     public string? VideoEncoder { get; init; }

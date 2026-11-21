@@ -19,6 +19,7 @@
 #pragma once
 
 #include <array>
+#include <map>
 #include <atomic>
 #include <string>
 #include <cstdint>
@@ -38,6 +39,7 @@
 #include "media/media_types.hpp"
 #include "media/test_signal.hpp"
 #include "media/time_base.hpp"
+#include "graphics/graphics.hpp"
 #include "output/output.hpp"
 #include "util/triple_buffer.hpp"
 
@@ -48,6 +50,13 @@ class Logger;
 namespace mixit::media {
 
 class GraphicsSource;
+}  // namespace mixit::media
+namespace mixit::replay {
+class ReplaySource;
+class ReplayBuffer;
+struct BufferInfo;
+}  // namespace mixit::replay
+namespace mixit::media {
 
 // Which compositor a session uses. Auto = CPU in this release: frames are
 // CPU-resident until the GPU decode/display paths land, and the GPU path then
@@ -66,7 +75,7 @@ struct SessionConfig {
 
 enum class SessionState : std::int32_t { Configuring = 1, Running = 2, Stopped = 3, Closed = 4 };
 
-enum class Bus : std::int32_t { Program = 0, Preview = 1 };
+enum class Bus : std::int32_t { Program = 0, Preview = 1, Multiview = 2 };
 
 struct LayerConfig {
     std::uint32_t input_id = 0;  // 0 = layer disabled
@@ -187,6 +196,22 @@ public:
         float level = 0.0f;    // current 0..1
     };
     Status set_overlay(std::uint32_t channel, const LayerConfig& layer);
+
+    // ---- multiview (M6) ----
+    // Preview + program (top) and up to 8 inputs (bottom), with labels and
+    // tally borders, rendered while read (copy_bus_frame(Multiview)) or
+    // recorded (output source kMultiviewSource).
+    static constexpr std::uint32_t kMultiviewSource = 0xFFFF;
+    static constexpr std::uint32_t kMultiviewInputs = 8;
+    Status set_input_label(std::uint32_t input_id, const std::string& label);
+
+    // ---- instant replay (M6) ----
+    // seconds = 0 disables. Any time; the buffer keeps recording while enabled.
+    Status enable_replay(std::uint32_t input_id, std::uint32_t seconds, std::uint32_t quality);
+    Status replay_buffer_info(std::uint32_t input_id, replay::BufferInfo& out) const;
+    // A replay input playing back `source_input_id`'s buffer (session not running).
+    Status add_replay_source(std::uint32_t source_input_id, std::uint32_t& out_input_id);
+    Status with_replay(std::uint32_t replay_input_id, const std::function<Status(replay::ReplaySource&)>& fn) const;
     Status show_overlay(std::uint32_t channel, bool visible, std::uint32_t fade_frames);
     Status overlay_info(std::uint32_t channel, OverlayInfo& out) const;
     Status start();
@@ -351,6 +376,18 @@ private:
     std::mutex consumer_mutex_;
     ProgramFrame program_cache_;  // latest frames handed to readers (guarded by consumer_mutex_)
     ProgramFrame preview_cache_;
+    ProgramFrame multiview_cache_;
+    MediaQueue<ProgramFrame> multiview_out_{2, OverflowPolicy::DropOldest};
+    std::atomic<std::int64_t> multiview_requested_ns_{-1'000'000'000'000LL};
+    std::map<std::uint32_t, std::string> labels_;  // guarded by scene_mutex_
+    // Output thread only: label/tally layer, re-rendered when it changes.
+    std::unique_ptr<graphics::Renderer> mv_renderer_;
+    std::unique_ptr<VideoFramePool> mv_label_pool_;
+    VideoRef mv_labels_;
+    std::string mv_labels_key_;
+    void render_multiview(const VideoRef& program, const VideoRef& preview, std::uint32_t program_id,
+                          std::uint32_t preview_id, const std::map<std::uint32_t, std::string>& labels,
+                          std::int64_t target, std::uint64_t tick, ProgramFrame& out) noexcept;
 
     std::atomic<bool> stop_requested_{false};
     std::thread output_thread_;
