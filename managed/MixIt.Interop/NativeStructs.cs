@@ -209,6 +209,54 @@ internal unsafe struct MixitAudioDeviceInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitOutputConfig
+{
+    public uint StructSize;
+    public uint SourceInput;
+    public byte* Url;
+    public byte* Format;
+    public byte* VideoEncoder;
+    public uint VideoKbps;
+    public uint KeyframeMs;
+    public uint AudioKbps;
+    public uint Flags;
+    public uint SegmentSeconds;
+    public uint Reserved;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitOutputStats
+{
+    public uint StructSize;
+    public int State;
+    public uint Flags;
+    public uint Segments;
+    public ulong BytesWritten;
+    public ulong VideoPackets;
+    public ulong AudioPackets;
+    public ulong DroppedPackets;
+    public ulong EncoderDroppedFrames;
+    public ulong Reconnects;
+    public uint BitrateKbps;
+    public uint QueueMs;
+    public long DurationNs;
+    public long FreeBytes;
+    public fixed byte Encoder[32];
+    public fixed byte CurrentFile[512];
+    public fixed byte LastError[256];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitVideoEncoderInfo
+{
+    public uint StructSize;
+    public uint Flags;
+    public fixed byte Name[32];
+    public fixed byte LongName[128];
+    public fixed byte Error[192];
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal unsafe struct MixitVst3PluginInfo
 {
     public uint StructSize;
@@ -427,6 +475,9 @@ internal static class NativeStructSizes
     public const int AudioOutputStats = 176;
     public const int AudioCaptureConfig = 16;
     public const int Vst3PluginInfo = 1008;
+    public const int OutputConfig = 56;
+    public const int OutputStats = 888;
+    public const int VideoEncoderInfo = 360;
     public const int AudioInsertConfig = 40;
     public const int AudioInsertInfo = 320;
     public const int AudioInsertParameter = 256;

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using Microsoft.Extensions.Logging;
 using MixIt.Core.Production;
@@ -15,7 +16,7 @@ namespace MixIt.Desktop;
 internal static class SelfTest
 {
     public static async Task RunProductionAsync(Task engineStart, ProductionViewModel vm, AudioMixerViewModel mixer,
-        ProductionService production, ILogger logger, Application app)
+        OutputsViewModel outputs, ProductionService production, ILogger logger, Application app)
     {
         var failures = new List<string>();
         try
@@ -72,6 +73,41 @@ internal static class SelfTest
                 failures.Add("strip does not show the insert slots");
             }
             mixer.IsActive = false;
+
+            // Recording through the Streaming & Recording section: add, start, stop, finalized file.
+            outputs.IsActive = true;
+            await outputs.CheckEncodersCommand.ExecuteAsync();
+            if (!outputs.EncoderStatus.StartsWith("Automatic uses", StringComparison.Ordinal)) failures.Add($"encoders: {outputs.EncoderStatus}");
+            string recDir = Path.Combine(Path.GetTempPath(), "mixit_selftest_rec");
+            if (Directory.Exists(recDir)) Directory.Delete(recDir, true);
+            outputs.Address = Path.Combine(recDir, "selftest.mp4");
+            outputs.VideoKbps = 2000;
+            outputs.AddCommand.Execute(null);
+            OutputRowViewModel? row = outputs.Outputs.LastOrDefault();
+            if (row is null || outputs.Error is not null)
+            {
+                failures.Add($"could not add a recording: {outputs.Error}");
+            }
+            else
+            {
+                row.StartCommand.Execute(null);
+                await Task.Delay(2500);
+                OutputStatistics? rec = production.GetOutputStatistics(production.Outputs[^1].Id);
+                if (rec?.State != OutputState.Running) failures.Add($"recording state {rec?.State}: {rec?.LastError}");
+                row.StopCommand.Execute(null);
+                for (int i = 0; i < 100 && production.GetOutputStatistics(production.Outputs[^1].Id)?.State != OutputState.Idle; i++)
+                {
+                    await Task.Delay(50);
+                }
+                rec = production.GetOutputStatistics(production.Outputs[^1].Id);
+                string file = Path.Combine(recDir, "selftest.mp4");
+                if (rec?.State != OutputState.Idle) failures.Add($"recording did not finish: {rec?.State}");
+                else if (!File.Exists(file) || new FileInfo(file).Length < 20_000) failures.Add("recorded file missing or too small");
+                else logger.LogInformation("Self-test recording: {Encoder}, {Bytes} bytes, {Duration}", rec.Encoder, rec.BytesWritten, rec.Duration);
+                if (rec?.DroppedPackets > 0 || rec?.DataLost == true) failures.Add("recording dropped data");
+            }
+            if (outputs.Error is not null) failures.Add($"outputs error shown: {outputs.Error}");
+            outputs.IsActive = false;
 
             await vm.ToggleProductionAsync();
             if (vm.IsRunning) failures.Add("production did not stop");

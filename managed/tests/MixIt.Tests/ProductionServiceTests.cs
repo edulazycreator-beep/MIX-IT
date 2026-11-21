@@ -163,6 +163,59 @@ public class ProductionServiceTests
     }
 
     [Fact]
+    public async Task RecordsTheProgramAndAnIsoAndKeepsOutputsAcrossRebuilds()
+    {
+        (EngineHost host, ProductionService service) = Create();
+        using (host)
+        using (service)
+        {
+            IReadOnlyList<VideoEncoderInfo> encoders = await service.QueryEncodersAsync();
+            if (!encoders.Any(e => e.Usable)) return;  // engine without FFmpeg / H.264 encoder
+            string dir = Path.Combine(Path.GetTempPath(), "mixit_managed_outputs");
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+            Directory.CreateDirectory(dir);
+            ProductionInput a = service.AddTestSignal();
+            ProductionInput b = service.AddTestSignal();
+            ProductionOutput program = service.AddOutput("Program", new OutputSettings { Url = Path.Combine(dir, "program.mkv"), VideoKbps = 1500 });
+            ProductionOutput iso = service.AddOutput("ISO B", new OutputSettings { Url = Path.Combine(dir, "iso.mp4"), VideoKbps = 1000 }, b.Id);
+            Assert.Null(program.SourceInputId);
+            Assert.Equal(b.Id, iso.SourceInputId);
+            Assert.Throws<InvalidOperationException>(() => service.StartOutput(program.Id));  // production stopped
+
+            service.SetFormat(ProductionFormat.Standard.First(f => f.Width == 1280));  // rebuild: outputs come back
+            Assert.Equal(2, service.Outputs.Count);
+            Assert.Equal(service.Inputs[1].Id, service.Outputs[1].SourceInputId);
+
+            await service.StartAsync();
+            service.StartOutput(program.Id);
+            service.StartOutput(iso.Id);
+            await Task.Delay(2500);
+            OutputStatistics running = service.GetOutputStatistics(program.Id)!;
+            Assert.Equal(OutputState.Running, running.State);
+            Assert.True(running.VideoPackets > 30);
+            service.StopOutput(program.Id);
+            OutputStatistics? done = null;
+            for (int i = 0; i < 100; i++)
+            {
+                done = service.GetOutputStatistics(program.Id);
+                if (done!.State == OutputState.Idle) break;
+                await Task.Delay(50);
+            }
+            Assert.Equal(OutputState.Idle, done!.State);
+            Assert.False(done.DataLost);
+            await service.StopAsync();  // stops and finalizes the ISO recording
+            Assert.Equal(OutputState.Idle, service.GetOutputStatistics(iso.Id)!.State);
+            Assert.True(new FileInfo(Path.Combine(dir, "program.mkv")).Length > 10_000);
+            Assert.True(new FileInfo(Path.Combine(dir, "iso.mp4")).Length > 10_000);
+
+            service.RemoveInput(service.Inputs[1].Id);  // its ISO output goes with it
+            Assert.Single(service.Outputs);
+            service.RemoveOutput(program.Id);
+            Assert.Empty(service.Outputs);
+        }
+    }
+
+    [Fact]
     public async Task PluginInsertsAndTheirSettingsSurviveAFormatChange()
     {
         string? bundle = Vst3Tests.TestBundle();

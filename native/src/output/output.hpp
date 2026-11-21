@@ -78,6 +78,10 @@ struct OutputStats {
     bool data_lost = false;              // files: packets were dropped (disk too slow / full)
 };
 
+// The url with stream keys, passwords and query values replaced by "***"
+// (for logs, errors and display).
+std::string redact_url(const std::string& url);
+
 struct EncoderInfo {
     std::string name;
     std::string long_name;

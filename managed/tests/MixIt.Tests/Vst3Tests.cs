@@ -68,3 +68,15 @@ public sealed class Vst3Tests
         Assert.Throws<MixItNativeException>(() => session.SetAudioInsert(a, 2, plugin.Path, plugin.ClassId));
     }
 }
+
+public sealed class UrlRedactionTests
+{
+    [Fact]
+    public void HidesSecrets()
+    {
+        Assert.Equal("rtmp://a.rtmp.youtube.com/live2/***", UrlRedaction.Redact("rtmp://a.rtmp.youtube.com/live2/abcd-efgh"));
+        Assert.Equal("srt://host:9000?mode=***&passphrase=***", UrlRedaction.Redact("srt://host:9000?mode=caller&passphrase=secret"));
+        Assert.Equal("rtmp://***@host/app/***", UrlRedaction.Redact("rtmp://user:pass@host/app/key"));
+        Assert.Equal(@"C:\Recordings\show.mp4", UrlRedaction.Redact(@"C:\Recordings\show.mp4"));
+    }
+}

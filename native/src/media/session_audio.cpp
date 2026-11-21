@@ -614,7 +614,7 @@ Status Session::start_output(std::uint32_t id) {
         has_audio = in->has_audio;
     }
     const Status st = outputs_->start(id, w, h, has_audio);
-    if (st.is_ok()) logger_.logf(MIXIT_LOG_INFO, "session", "output {} started ({})", id, cfg.url);
+    if (st.is_ok()) logger_.logf(MIXIT_LOG_INFO, "session", "output {} started ({})", id, output::redact_url(cfg.url));
     return st;
 }
 

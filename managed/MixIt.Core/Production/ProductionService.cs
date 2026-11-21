@@ -18,6 +18,10 @@ public enum ProductionInputKind
 /// <summary>An input of the current production, as the operator sees it.</summary>
 public sealed record ProductionInput(uint Id, string Name, ProductionInputKind Kind, string Detail);
 
+/// <summary>A recording or stream destination (M5). Ids are stable across session rebuilds.</summary>
+/// <param name="SourceInputId">null = program; otherwise the input recorded (ISO).</param>
+public sealed record ProductionOutput(int Id, string Name, OutputSettings Settings, uint? SourceInputId);
+
 /// <summary>A selectable production format.</summary>
 public sealed record ProductionFormat(string Name, uint Width, uint Height, MediaRate FrameRate)
 {
@@ -57,6 +61,8 @@ public sealed class ProductionService : IDisposable
     private readonly ILogger<ProductionService> _logger;
     private readonly List<InputSpec> _specs = [];
     private readonly List<ProductionInput> _inputs = [];
+    private readonly List<OutputSpec> _outputs = [];
+    private int _nextOutputId = 1;
     private NativeSession? _session;
     private ProductionFormat _format = ProductionFormat.Standard[0];
     private CompositorPreference _compositor = CompositorPreference.Auto;
@@ -151,7 +157,15 @@ public sealed class ProductionService : IDisposable
         int index = _inputs.FindIndex(i => i.Id == inputId);
         if (index < 0) return;
         if (_pipInputId == inputId) SetPictureInPicture(null);
-        RequireSession().RemoveInput(inputId);
+        NativeSession session = RequireSession();
+        foreach (OutputSpec o in _outputs.Where(o => ReferenceEquals(o.Source, _specs[index])).ToList())
+        {
+            // An ISO recording of this input goes with it.
+            if (o.NativeId is { } nid) session.RemoveOutput(nid);
+            _outputs.Remove(o);
+            _logger.LogInformation("Output {Name} removed with its input", o.Name);
+        }
+        session.RemoveInput(inputId);
         _inputs.RemoveAt(index);
         _specs.RemoveAt(index);
         RaiseChanged();
@@ -476,6 +490,7 @@ public sealed class ProductionService : IDisposable
                 ReapplyInserts(session, id, _specs[i]);
             }
             foreach ((AudioBus bus, AudioBusSettings settings) in _buses) session.SetAudioBus(bus, settings);
+            foreach (OutputSpec spec in _outputs) spec.NativeId = session.AddOutput(NativeSettings(spec, session));
             session.SetMonitorSource(_monitorSource);
             if (_audioOutput is { } o) TryApplyOutput(session, o.Bus, o.DeviceId);
         }
@@ -487,6 +502,97 @@ public sealed class ProductionService : IDisposable
         _pipInputId = null;
         _session = session;
         return session;
+    }
+
+    // ---- outputs: recording and streaming (M5) ----
+
+    public IReadOnlyList<ProductionOutput> Outputs =>
+        _outputs.Select(o => new ProductionOutput(o.Id, o.Name, o.Settings, SourceId(o))).ToList();
+
+    /// <summary>Adds a destination (validated by the engine). <paramref name="isoInputId"/>: record that input instead of the program.</summary>
+    public ProductionOutput AddOutput(string name, OutputSettings settings, uint? isoInputId = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(settings);
+        InputSpec? source = null;
+        if (isoInputId is { } iid)
+        {
+            int index = _inputs.FindIndex(i => i.Id == iid);
+            if (index < 0) throw new ArgumentException($"No input {iid}.", nameof(isoInputId));
+            source = _specs[index];
+        }
+        var spec = new OutputSpec(_nextOutputId++, name.Trim(), settings with { SourceInputId = 0 }, source);
+        NativeSession session = RequireSession();
+        spec.NativeId = session.AddOutput(NativeSettings(spec, session));
+        _outputs.Add(spec);
+        _logger.LogInformation("Output {Name} added ({Kind})", spec.Name, settings.IsNetwork ? "stream" : "recording");
+        RaiseChanged();
+        return Outputs.Single(o => o.Id == spec.Id);
+    }
+
+    public void RemoveOutput(int outputId)
+    {
+        OutputSpec spec = OutputOf(outputId);
+        if (spec.NativeId is { } nid && _session is not null)
+        {
+            OutputState state = _session.GetOutputStatistics(nid).State;
+            if (state is not (OutputState.Idle or OutputState.Failed)) throw new InvalidOperationException("Stop the output first.");
+            _session.RemoveOutput(nid);
+        }
+        _outputs.Remove(spec);
+        RaiseChanged();
+    }
+
+    /// <summary>Starts recording/streaming (production must be running).</summary>
+    public void StartOutput(int outputId)
+    {
+        if (!IsRunning) throw new InvalidOperationException("Start production before recording or streaming.");
+        OutputSpec spec = OutputOf(outputId);
+        RequireSession().StartOutput(spec.NativeId ?? throw new InvalidOperationException("Output not in the session."));
+        _logger.LogInformation("Output {Name} started", spec.Name);
+    }
+
+    /// <summary>Stops gracefully (files are finalized in the background).</summary>
+    public void StopOutput(int outputId)
+    {
+        OutputSpec spec = OutputOf(outputId);
+        if (spec.NativeId is { } nid && _session is not null) _session.StopOutput(nid);
+        _logger.LogInformation("Output {Name} stopping", spec.Name);
+    }
+
+    public OutputStatistics? GetOutputStatistics(int outputId)
+    {
+        OutputSpec spec = OutputOf(outputId);
+        return spec.NativeId is { } nid && _session is not null ? _session.GetOutputStatistics(nid) : null;
+    }
+
+    /// <summary>H.264 encoders, open-tested on a worker thread.</summary>
+    public Task<IReadOnlyList<VideoEncoderInfo>> QueryEncodersAsync() =>
+        EngineAvailable ? Task.Run(NativeEngine.QueryVideoEncoders) : Task.FromResult<IReadOnlyList<VideoEncoderInfo>>([]);
+
+    private OutputSpec OutputOf(int id) =>
+        _outputs.FirstOrDefault(o => o.Id == id) ?? throw new ArgumentException($"No output {id}.", nameof(id));
+
+    private uint? SourceId(OutputSpec o)
+    {
+        if (o.Source is null) return null;
+        int index = _specs.IndexOf(o.Source);
+        return index < 0 ? null : _inputs[index].Id;
+    }
+
+    private OutputSettings NativeSettings(OutputSpec o, NativeSession session)
+    {
+        _ = session;
+        return o.Settings with { SourceInputId = SourceId(o) ?? 0 };
+    }
+
+    private sealed class OutputSpec(int id, string name, OutputSettings settings, InputSpec? source)
+    {
+        public int Id { get; } = id;
+        public string Name { get; } = name;
+        public OutputSettings Settings { get; } = settings;
+        public InputSpec? Source { get; } = source;
+        public uint? NativeId { get; set; }
     }
 
     private void RequireStopped(string action)
@@ -545,6 +651,7 @@ public sealed class ProductionService : IDisposable
     private void DisposeSession()
     {
         SnapshotInserts();
+        foreach (OutputSpec o in _outputs) o.NativeId = null;
         _session?.Dispose();
         _session = null;
         IsRunning = false;

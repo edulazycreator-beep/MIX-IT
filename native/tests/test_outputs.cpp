@@ -225,6 +225,13 @@ TEST(Outputs, RecordsTheProgramToMp4InSync) {
     std::printf("A/V: %d flashes matched, worst offset %.3f ms\n", matched, offset * 1000.0);
     EXPECT_GE(matched, 6);
     EXPECT_LT(offset, 0.040) << "flash vs click in the recording";
+    // Recording again to the same name never overwrites the first file.
+    ASSERT_EQ(mixit_session_start_output(s.session, o), MIXIT_OK) << last_error();
+    sleep_ms(1500);
+    ASSERT_EQ(mixit_session_stop_output(s.session, o), MIXIT_OK);
+    const mixit_output_stats again = s.wait_for(o, MIXIT_OUTPUT_IDLE);
+    EXPECT_STREQ(again.current_file, str(file.parent_path() / "program (2).mp4").c_str());
+    EXPECT_TRUE(decode_media(str(file)).error.empty()) << "the first recording is intact";
     EXPECT_EQ(mixit_session_remove_output(s.session, o), MIXIT_OK);
     EXPECT_EQ(mixit_session_get_output_stats(s.session, o, nullptr), MIXIT_E_INVALID_ARGUMENT);
 }
@@ -284,6 +291,27 @@ TEST(Outputs, StreamsRtmpToALocalServer) {
     EXPECT_EQ(received.decode_errors, 0);
     EXPECT_GT(received.frame_times.size(), 80u);
     EXPECT_GT(received.audio.size(), 100000u);
+}
+
+TEST(Outputs, StreamsSrtToALocalListener) {
+    if (!ffmpeg_usable()) GTEST_SKIP() << "FFmpeg not available";
+    Studio s;
+    DecodedMedia received;
+    std::thread server([&] { received = decode_media("srt://127.0.0.1:19362?mode=listener", "", 3.0, 20.0); });
+    sleep_ms(500);
+    const uint32_t o = s.add_output("srt://127.0.0.1:19362?mode=caller");
+    ASSERT_EQ(mixit_session_start(s.session), MIXIT_OK);
+    ASSERT_EQ(mixit_session_start_output(s.session, o), MIXIT_OK) << last_error();
+    server.join();
+    const mixit_output_stats st = s.stats(o);
+    ASSERT_EQ(mixit_session_stop_output(s.session, o), MIXIT_OK);
+    if (received.error.find("Protocol not found") != std::string::npos) GTEST_SKIP() << "FFmpeg built without SRT";
+    ASSERT_TRUE(received.error.empty()) << received.error << " / output: " << st.last_error;
+    EXPECT_EQ(received.format, "mpegts");
+    EXPECT_EQ(received.video_codec, "h264");
+    EXPECT_EQ(received.audio_codec, "aac");
+    EXPECT_EQ(received.decode_errors, 0) << "decodable from the first packet received (SPS/PPS in band)";
+    EXPECT_GT(received.frame_times.size(), 60u);
 }
 
 TEST(Outputs, ABrokenDestinationDoesNotDisturbTheOthers) {
@@ -391,4 +419,17 @@ TEST(Outputs, Validation) {
     EXPECT_EQ(s.stats(id).state, MIXIT_OUTPUT_FAILED);
     EXPECT_EQ(mixit_session_start_output(s.session, 4242), MIXIT_E_NOT_FOUND);
     EXPECT_EQ(mixit_session_remove_output(s.session, id), MIXIT_OK);
+}
+
+#include "output/output.hpp"
+
+TEST(Outputs, RedactsStreamKeysAndPasswords) {
+    using mixit::output::redact_url;
+    EXPECT_EQ(redact_url("rtmp://a.rtmp.youtube.com/live2/abcd-efgh-ijkl"), "rtmp://a.rtmp.youtube.com/live2/***");
+    EXPECT_EQ(redact_url("rtmps://live-api-s.facebook.com:443/rtmp/FB-123?s_bl=1&a=xyz"),
+              "rtmps://live-api-s.facebook.com:443/rtmp/***?s_bl=***&a=***");
+    EXPECT_EQ(redact_url("srt://host:9000?mode=caller&passphrase=secret123&streamid=key"),
+              "srt://host:9000?mode=***&passphrase=***&streamid=***");
+    EXPECT_EQ(redact_url("rtmp://user:pass@host/app/key"), "rtmp://***@host/app/***");
+    EXPECT_EQ(redact_url("C:\\Recordings\\show.mp4"), "C:\\Recordings\\show.mp4");
 }

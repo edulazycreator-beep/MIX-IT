@@ -33,9 +33,12 @@ public sealed class AsyncCommand(Func<Task> execute, Func<bool>? canExecute = nu
 
     public bool CanExecute(object? parameter) => !_running && (canExecute?.Invoke() ?? true);
 
-    public async void Execute(object? parameter)
+    public async void Execute(object? parameter) => await ExecuteAsync();
+
+    /// <summary>Runs the command and completes when it has finished (for callers that must wait).</summary>
+    public async Task ExecuteAsync()
     {
-        if (!CanExecute(parameter)) return;
+        if (!CanExecute(null)) return;
         _running = true;
         RaiseCanExecuteChanged();
         try

@@ -31,6 +31,7 @@ set(MIXIT_CORE_SOURCES
     src/audio/audio_device_wasapi.cpp
     src/audio/vst3_host.cpp
     src/output/output.cpp
+    src/output/output_url.cpp
     src/media/test_signal.cpp
     src/media/test_signal_source.cpp
     src/media/time_base.cpp

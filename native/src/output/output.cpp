@@ -344,8 +344,31 @@ private:
         return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
     }
 
+    // Recordings never overwrite an existing file: "name (2).ext", ...
+    static std::string unused_file_name(const std::string& name) {
+        std::error_code ec;
+        const fs::path p = utf8_path(name);
+        if (!fs::exists(p, ec)) return name;
+        for (int n = 2; n < 10'000; ++n) {
+            const std::u8string suffix = u8" (" + std::u8string(reinterpret_cast<const char8_t*>(std::to_string(n).c_str())) + u8")";
+            const fs::path candidate = p.parent_path() / (p.stem().u8string() + suffix + p.extension().u8string());
+            if (!fs::exists(candidate, ec)) {
+                const std::u8string u8 = candidate.u8string();
+                return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+            }
+        }
+        return name;
+    }
+
     Status open_output() {
-        const std::string url = target_name();
+        std::string url = target_name();
+        if (!network_ && format_ != "hls") {
+            url = unused_file_name(url);
+            // Create the folder if needed (a recording must not fail on a missing folder).
+            std::error_code ec;
+            const fs::path dir = utf8_path(url).parent_path();
+            if (!dir.empty()) fs::create_directories(dir, ec);
+        }
         AVFormatContext* oc = nullptr;
         int err = avformat_alloc_output_context2(&oc, nullptr, format_.c_str(), url.c_str());
         if (err < 0 || oc == nullptr) return {MIXIT_E_INTERNAL, "cannot create the " + format_ + " muxer: " + av_error_text(err)};
@@ -392,7 +415,7 @@ private:
             if (err < 0) {
                 av_dict_free(&opts);
                 close_output(false);
-                return {MIXIT_E_IO, "cannot open " + url + ": " + av_error_text(err)};
+                return {MIXIT_E_IO, "cannot open " + redact_url(url) + ": " + av_error_text(err)};
             }
         }
         arm(10'000);
@@ -400,7 +423,7 @@ private:
         av_dict_free(&opts);
         if (err < 0) {
             close_output(false);
-            return {MIXIT_E_IO, "cannot start " + url + ": " + av_error_text(err)};
+            return {MIXIT_E_IO, "cannot start " + redact_url(url) + ": " + av_error_text(err)};
         }
         connected_.store(true);
         out_tb_[0] = oc_->streams[0]->time_base;
@@ -564,7 +587,7 @@ private:
             attempt = 0;
             set_state(OutputState::Running);
             if (want_keyframe_) want_keyframe_();
-            logger_.logf(MIXIT_LOG_INFO, "output", "output {}: writing {} ({})", id_, network_ ? config_.url : target_name(), format_);
+            logger_.logf(MIXIT_LOG_INFO, "output", "output {}: writing {} ({})", id_, network_ ? redact_url(config_.url) : target_name(), format_);
             bool write_error = false;
             bool next_segment = false;
             Item it{};

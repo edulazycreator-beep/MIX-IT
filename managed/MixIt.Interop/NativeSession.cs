@@ -545,6 +545,67 @@ public sealed unsafe class NativeSession : IDisposable
 
     private static TimeSpan FromNs(long ns) => TimeSpan.FromTicks(ns / 100);
 
+    // ---- outputs: recording and streaming (M5) ----
+
+    /// <summary>Adds an output (not started). Returns its id.</summary>
+    public uint AddOutput(OutputSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        byte* url = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(settings.Url);
+        byte* format = settings.Format is null ? null : (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(settings.Format);
+        byte* encoder = settings.VideoEncoder is null
+            ? null
+            : (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(settings.VideoEncoder);
+        try
+        {
+            var c = new MixitOutputConfig
+            {
+                StructSize = (uint)sizeof(MixitOutputConfig),
+                SourceInput = settings.SourceInputId,
+                Url = url,
+                Format = format,
+                VideoEncoder = encoder,
+                VideoKbps = (uint)Math.Max(0, settings.VideoKbps),
+                KeyframeMs = (uint)Math.Max(0, settings.KeyframeMilliseconds),
+                AudioKbps = (uint)Math.Max(0, settings.AudioKbps),
+                Flags = (settings.Fragmented ? 0u : 1u) | (settings.Reconnect ? 0u : 2u),
+                SegmentSeconds = (uint)Math.Max(0, settings.SegmentSeconds),
+            };
+            uint id = 0;
+            Check(NativeMethods.mixit_session_add_output(_handle, &c, &id), "mixit_session_add_output");
+            return id;
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)url);
+            if (format != null) System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)format);
+            if (encoder != null) System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)encoder);
+        }
+    }
+
+    public void RemoveOutput(uint outputId) =>
+        Check(NativeMethods.mixit_session_remove_output(_handle, outputId), "mixit_session_remove_output");
+
+    /// <summary>Opens the encoder (errors are thrown here); the destination connects in the background.</summary>
+    public void StartOutput(uint outputId) =>
+        Check(NativeMethods.mixit_session_start_output(_handle, outputId), "mixit_session_start_output");
+
+    /// <summary>Asynchronous: the output drains and finalizes (Stopping → Idle).</summary>
+    public void StopOutput(uint outputId) =>
+        Check(NativeMethods.mixit_session_stop_output(_handle, outputId), "mixit_session_stop_output");
+
+    public OutputStatistics GetOutputStatistics(uint outputId)
+    {
+        MixitOutputStats s = default;
+        s.StructSize = (uint)sizeof(MixitOutputStats);
+        Check(NativeMethods.mixit_session_get_output_stats(_handle, outputId, &s), "mixit_session_get_output_stats");
+        return new OutputStatistics((OutputState)s.State, Utf8.FromNullTerminated(s.Encoder, 32), (s.Flags & 1) != 0,
+            Utf8.FromNullTerminated(s.CurrentFile, 512), Utf8.FromNullTerminated(s.LastError, 256), s.BytesWritten,
+            s.VideoPackets, s.AudioPackets, s.DroppedPackets, s.EncoderDroppedFrames, s.Reconnects, (int)s.Segments,
+            (int)s.BitrateKbps, (int)s.QueueMs, TimeSpan.FromTicks(s.DurationNs / 100), s.FreeBytes < 0 ? null : s.FreeBytes,
+            (s.Flags & 2) != 0);
+    }
+
     // ---- VST3 inserts (EXPERIMENTAL) ----
 
     /// <summary>Number of insert slots per strip (before the strip DSP).</summary>

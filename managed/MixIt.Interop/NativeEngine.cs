@@ -240,6 +240,32 @@ public sealed unsafe class NativeEngine : IDisposable
     }
 
     /// <summary>
+    /// H.264 encoders of this build, preferred first, each open-tested (hardware probing: slow,
+    /// not on the UI thread). Empty when the engine has no FFmpeg.
+    /// </summary>
+    public static IReadOnlyList<VideoEncoderInfo> QueryVideoEncoders()
+    {
+        var raw = new MixitVideoEncoderInfo[16];
+        for (int i = 0; i < raw.Length; i++) raw[i].StructSize = (uint)sizeof(MixitVideoEncoderInfo);
+        uint count = 0;
+        NativeResult r;
+        fixed (MixitVideoEncoderInfo* a = raw)
+        {
+            r = NativeMethods.mixit_query_video_encoders(a, (uint)raw.Length, &count);
+        }
+        if (r == NativeResult.NotSupported) return [];
+        if (r != NativeResult.BufferTooSmall) Check(r, "mixit_query_video_encoders");
+        var list = new List<VideoEncoderInfo>();
+        for (int i = 0; i < Math.Min(count, (uint)raw.Length); i++)
+        {
+            MixitVideoEncoderInfo e = raw[i];
+            list.Add(new VideoEncoderInfo(Utf8.FromNullTerminated(e.Name, 32), Utf8.FromNullTerminated(e.LongName, 128),
+                (e.Flags & 1) != 0, (e.Flags & 2) != 0, Utf8.FromNullTerminated(e.Error, 192)));
+        }
+        return list;
+    }
+
+    /// <summary>
     /// Scans a .vst3 bundle or folder, or the platform's default plug-in folders when
     /// <paramref name="path"/> is null. Loads every plug-in binary: slow, call off the UI thread.
     /// </summary>

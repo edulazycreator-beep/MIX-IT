@@ -1,0 +1,129 @@
+<UserControl x:Class="MixIt.Desktop.Views.OutputsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Streaming & Recording. DataContext: OutputsViewModel. Bindings only,
+         except the stream key box (PasswordBox cannot bind; see code-behind). -->
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+        <Style x:Key="FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource Label}">
+            <Setter Property="Width" Value="110" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="Field" TargetType="DockPanel">
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+    </UserControl.Resources>
+
+    <DockPanel>
+        <TextBlock DockPanel.Dock="Top" Text="Streaming &amp; Recording" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
+
+        <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="12,8" CornerRadius="4"
+                Background="{StaticResource PanelRaisedBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Error}" Value="{x:Null}">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <TextBlock Text="{Binding Error}" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- New destination -->
+        <Border DockPanel.Dock="Left" Width="420" Style="{StaticResource PanelStyle}" Padding="12" Margin="0,0,12,0" VerticalAlignment="Top">
+            <StackPanel>
+                <TextBlock Text="ADD DESTINATION" Style="{StaticResource Label}" Margin="0,0,0,8" />
+                <DockPanel Style="{StaticResource Field}">
+                    <TextBlock Text="Type" Style="{StaticResource FieldLabel}" />
+                    <ComboBox ItemsSource="{Binding Kinds}" SelectedItem="{Binding Kind}" DisplayMemberPath="Title" />
+                </DockPanel>
+                <DockPanel Style="{StaticResource Field}">
+                    <TextBlock Text="Name" Style="{StaticResource FieldLabel}" />
+                    <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                </DockPanel>
+                <DockPanel Style="{StaticResource Field}">
+                    <TextBlock Text="Address" Style="{StaticResource FieldLabel}" />
+                    <TextBox Text="{Binding Address, UpdateSourceTrigger=PropertyChanged}" ToolTip="{Binding Kind.UrlHint}" />
+                </DockPanel>
+                <DockPanel Style="{StaticResource Field}" Visibility="{Binding IsRtmp, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="Stream key" Style="{StaticResource FieldLabel}" />
+                    <PasswordBox x:Name="StreamKeyBox" PasswordChanged="OnStreamKeyChanged"
+                                 ToolTip="Appended to the server URL. Never shown again; logs show *** instead." />
+                </DockPanel>
+                <DockPanel Style="{StaticResource Field}">
+                    <TextBlock Text="Source" Style="{StaticResource FieldLabel}" />
+                    <ComboBox ItemsSource="{Binding Sources}" SelectedItem="{Binding Source}" DisplayMemberPath="Title"
+                              ToolTip="Program, or one input recorded on its own (ISO, at the input's size, clean audio)" />
+                </DockPanel>
+                <DockPanel Style="{StaticResource Field}">
+                    <TextBlock Text="Video bitrate" Style="{StaticResource FieldLabel}" />
+                    <TextBlock DockPanel.Dock="Right" Text="kb/s" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="6,0,0,0" />
+                    <TextBox Text="{Binding VideoKbps, UpdateSourceTrigger=LostFocus}" />
+                </DockPanel>
+                <DockPanel Style="{StaticResource Field}">
+                    <TextBlock Text="Encoder" Style="{StaticResource FieldLabel}" />
+                    <Button DockPanel.Dock="Right" Content="Test" Command="{Binding CheckEncodersCommand}" Style="{StaticResource StudioButton}"
+                            Margin="6,0,0,0" ToolTip="Find the H.264 encoders that work on this PC (NVENC, Quick Sync, AMF, ...)" />
+                    <ComboBox ItemsSource="{Binding Encoders}" SelectedItem="{Binding Encoder}" />
+                </DockPanel>
+                <TextBlock Text="{Binding EncoderStatus}" Style="{StaticResource Label}" Margin="110,0,0,6" TextWrapping="Wrap" />
+                <DockPanel Style="{StaticResource Field}" Visibility="{Binding IsFile, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="New file every" Style="{StaticResource FieldLabel}" />
+                    <TextBlock DockPanel.Dock="Right" Text="min (0 = one file)" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="6,0,0,0" />
+                    <TextBox Text="{Binding SegmentMinutes, UpdateSourceTrigger=LostFocus}" />
+                </DockPanel>
+                <Button Content="+ Add destination" Command="{Binding AddCommand}" Style="{StaticResource StudioButton}"
+                        HorizontalAlignment="Left" Margin="110,6,0,0" />
+                <TextBlock Style="{StaticResource Label}" TextWrapping="Wrap" Margin="0,12,0,0"
+                           Text="Recordings never overwrite a file: a second take becomes &quot;Program (2).mp4&quot;. MP4/MOV are written fragmented and stay playable after a crash. Each destination has its own buffer: a slow or broken one cannot hold up the others or the program." />
+            </StackPanel>
+        </Border>
+
+        <!-- Destinations -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Outputs}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Style="{StaticResource PanelStyle}" Padding="12,8" Margin="0,0,0,8">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Content="Start" Command="{Binding StartCommand}" Style="{StaticResource StudioButton}" Margin="0,0,6,0"
+                                            ToolTip="Start (production must be running)" />
+                                    <Button Content="Stop" Command="{Binding StopCommand}" Style="{StaticResource StudioButton}" Margin="0,0,6,0"
+                                            ToolTip="Stop; recordings are finalized" />
+                                    <Button Content="Remove" Command="{Binding RemoveCommand}" Style="{StaticResource StudioButton}" />
+                                </StackPanel>
+                                <Border DockPanel.Dock="Left" Width="110" Padding="6,3" CornerRadius="3" Margin="0,0,12,0" VerticalAlignment="Center">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{StaticResource PanelRaisedBrush}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsLive}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource ProgramBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsProblem}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource WarningBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock Text="{Binding State}" HorizontalAlignment="Center" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                </Border>
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding Kind}" Style="{StaticResource Label}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Target}" Style="{StaticResource Label}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Details}" Style="{StaticResource Value}" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>
