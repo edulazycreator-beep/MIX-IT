@@ -52,6 +52,11 @@ public:
     // Output thread; never blocks (drops and counts when the encoder is behind).
     void feed(const media::VideoRef& frame, std::int64_t pts_ns) noexcept;
 
+    // Stops taking frames and returns only when no frame of the recorded
+    // input's pool is held any more (queued or being converted). Call before
+    // that pool goes away: replay inputs may keep the buffer (JPEG copies) alive.
+    void detach() noexcept;
+
     // Readers (any thread).
     [[nodiscard]] BufferInfo info() const;
     // Newest frame with pts <= at_ns (false if none).
@@ -70,6 +75,9 @@ private:
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::deque<std::pair<media::VideoRef, std::int64_t>> queue_;  // bounded (3)
+    std::condition_variable released_cv_;
+    bool in_flight_ = false;  // the encoder thread holds a pool frame
+    bool detached_ = false;
     bool stop_ = false;
     std::atomic<std::uint64_t> dropped_{0};
 

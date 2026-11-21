@@ -3,6 +3,26 @@
 All notable changes to MIX IT. Format: Keep a Changelog; versions follow the
 native API version until the first product release.
 
+## [0.6.0] — 2026-11-21 — Milestone 6: Graphics and production tools
+
+### Added
+- C ABI 0.6.0 (75 exports): layer keyers, overlay channels, graphics inputs, multiview bus and output source, input labels, instant replay. `mixit_layer_config` grows to 80 bytes (the 0.3 size 48 is still accepted, without key).
+- Chroma key (BT.709 CbCr distance, soft edge, spill suppression) and luma key (threshold, softness, invert) per layer, identical in the CPU and D3D11 compositors.
+- Four overlay channels (downstream keys) drawn after transitions, with fades; they stay on air across cuts and count for audio-follows-video.
+- Graphics inputs (ADR-0011): JSON scenes of rectangles, text and images; FreeType 2.14.3 text with embedded DejaVu Sans/Bold 2.37 (kerning, alignment, fit-to-box, shadow); live fields, local clock and stopwatch/countdown; rendered only on change. Own bounded JSON parser.
+- Multiview bus: preview, program and inputs 1–8 with labels and tally borders, rendered only while shown or recorded; outputs can record/stream it with program audio.
+- Instant replay: per-input MJPEG buffer of the last 5–600 s (non-blocking feed, drops counted), replay inputs that play from any moment at 0.1–2× with pause.
+- Managed: keys, overlays, graphics, replay and multiview bindings; `GraphicsTemplates` (lower third, title, clock, countdown, scoreboard, logo); `ProductionService` graphics, overlays (restored after rebuilds), replay (mark in, play from mark or the last N seconds, speed, pause), `RenameInput` (multiview label), multiview outputs.
+- Desktop: **Graphics Studio** (templates, live field editing, timers, overlay channels with key, placement presets for a basic 2D virtual set, fade IN/OUT/CUT) and **Replay & Multiview** (multiview monitor, replay inputs with MARK IN / PLAY MARK / LAST 5 s / speed / pause / to preview); multiview choice in Streaming & Recording. The self-test also checks a lower third on an overlay, the multiview monitor and a replay at 50 %.
+- ADR-0011; API contract §M6 incl. the scene format; engine design §12; FreeType and DejaVu in the licence inventory (licence texts packaged).
+- 13 native tests (154 total), 2 managed tests (46 total).
+
+### Changed
+- Program pool 16 → 18 frames; input pools +3 (replay queue).
+
+### Fixed
+- An overlay channel was emptied when the input list was rebuilt (the WPF ComboBox pushed a null selection into the view model) — found by the self-test.
+
 ## [0.5.0] — 2026-11-21 — Milestone 5: Streaming and recording
 
 ### Added

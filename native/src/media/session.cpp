@@ -949,7 +949,8 @@ Status Session::enable_replay(std::uint32_t input_id, std::uint32_t seconds, std
     }
     in->replay.store(buffer.get(), std::memory_order_seq_cst);
     wait_feed_quiescent();  // the output thread no longer feeds the old buffer
-    // Replay inputs keep their own reference to an old buffer.
+    // Replay inputs may keep the old buffer (its JPEG frames); it must let go of this input's pool frames.
+    if (in->replay_owned) in->replay_owned->detach();
     in->replay_owned = std::move(buffer);
     logger_.logf(MIXIT_LOG_INFO, "session", "input {}: replay {}", input_id,
                  seconds == 0 ? std::string("off") : std::to_string(seconds) + " s, quality " + std::to_string(quality));

@@ -102,7 +102,7 @@ void ReplayBuffer::feed(const media::VideoRef& frame, std::int64_t pts_ns) noexc
     if (!frame) return;
     {
         std::unique_lock lock(queue_mutex_, std::try_to_lock);
-        if (!lock.owns_lock() || queue_.size() >= kQueueDepth) {
+        if (!lock.owns_lock() || detached_ || queue_.size() >= kQueueDepth) {
             dropped_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
@@ -121,13 +121,25 @@ void ReplayBuffer::run() noexcept {
             if (stop_) return;
             item = std::move(queue_.front());
             queue_.pop_front();
+            in_flight_ = true;
         }
+        // Releases the pool frame (before detach() can return).
+        auto release = [&] {
+            item.first.reset();
+            {
+                std::lock_guard lock(queue_mutex_);
+                in_flight_ = false;
+            }
+            released_cv_.notify_all();
+        };
         const media::VideoFrame& f = *item.first;
+        const std::uint32_t fw = f.width, fh = f.height;
         Encoder& e = *encoder_;
         if (e.ctx == nullptr || e.width != f.width || e.height != f.height) {
             if (Status st = e.open(f.width, f.height, quality_); !st.is_ok()) {
                 logger_.logf(MIXIT_LOG_ERROR, "replay", "replay encoder: {}", st.message());
                 dropped_.fetch_add(1, std::memory_order_relaxed);
+                release();
                 continue;
             }
         }
@@ -135,12 +147,15 @@ void ReplayBuffer::run() noexcept {
         // (it deprecates the J formats).
         e.sws = sws_getCachedContext(e.sws, static_cast<int>(f.width), static_cast<int>(f.height), AV_PIX_FMT_BGRA, e.ctx->width,
                                      e.ctx->height, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
-        if (e.sws == nullptr || av_frame_make_writable(e.frame) < 0) continue;
+        if (e.sws == nullptr || av_frame_make_writable(e.frame) < 0) {
+            release();
+            continue;
+        }
         set_full_range(e.sws, /*src_full=*/true, /*dst_full=*/true);
         const std::uint8_t* src[1] = {f.data};
         const int stride[1] = {static_cast<int>(f.stride)};
         sws_scale(e.sws, src, stride, 0, static_cast<int>(f.height), e.frame->data, e.frame->linesize);
-        item.first.reset();  // give the frame back to the session early
+        release();  // give the frame back to the session early; f is invalid from here
         e.frame->pts = item.second / 1'000'000;
         if (avcodec_send_frame(e.ctx, e.frame) < 0) continue;
         while (avcodec_receive_packet(e.ctx, e.pkt) >= 0) {
@@ -149,14 +164,21 @@ void ReplayBuffer::run() noexcept {
             std::lock_guard lock(frames_mutex_);
             bytes_ += bytes->size();
             frames_.push_back(ReplayFrame{item.second, std::move(bytes)});
-            width_ = f.width;
-            height_ = f.height;
+            width_ = fw;
+            height_ = fh;
             while (!frames_.empty() && frames_.back().pts_ns - frames_.front().pts_ns > span_ns_) {
                 bytes_ -= frames_.front().jpeg->size();
                 frames_.pop_front();
             }
         }
     }
+}
+
+void ReplayBuffer::detach() noexcept {
+    std::unique_lock lock(queue_mutex_);
+    detached_ = true;
+    queue_.clear();
+    released_cv_.wait(lock, [&] { return !in_flight_; });
 }
 
 BufferInfo ReplayBuffer::info() const {
@@ -246,6 +268,7 @@ ReplayBuffer::ReplayBuffer(std::uint32_t seconds, std::uint32_t quality, Logger&
     : span_ns_(static_cast<std::int64_t>(seconds) * 1'000'000'000), quality_(quality), logger_(logger) {}
 ReplayBuffer::~ReplayBuffer() = default;
 void ReplayBuffer::feed(const media::VideoRef&, std::int64_t) noexcept {}
+void ReplayBuffer::detach() noexcept {}
 void ReplayBuffer::run() noexcept {}
 BufferInfo ReplayBuffer::info() const { return {}; }
 bool ReplayBuffer::frame_at(std::int64_t, ReplayFrame&) const { return false; }

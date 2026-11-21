@@ -520,6 +520,10 @@ TEST(Replay, SlowMotionPlaybackOfARecordedInput) {
     EXPECT_EQ(st.position_ns, held);
     EXPECT_FLOAT_EQ(st.speed, 0.5f);
     ASSERT_EQ(mixit_session_stop(s.session), MIXIT_OK);
+    // The recorded input can go while its replay input stays (sanitizers check
+    // that the buffer released every frame of the removed input's pool).
+    ASSERT_EQ(mixit_session_remove_input(s.session, s.a), MIXIT_OK) << last_error();
+    EXPECT_EQ(mixit_session_get_replay_state(s.session, r, &st), MIXIT_OK);
 
     const DecodedMedia m = decode_media(str(file));
     ASSERT_TRUE(m.error.empty()) << m.error;

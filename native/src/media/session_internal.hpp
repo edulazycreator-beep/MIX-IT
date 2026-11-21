@@ -51,6 +51,12 @@ inline void atomic_max(std::atomic<std::int64_t>& target, std::int64_t value) no
 }  // namespace internal
 
 struct Session::Input {
+    // A replay buffer may outlive this input (replay inputs share it): make it
+    // drop every frame of video_pool before the pool is destroyed.
+    ~Input() {
+        if (replay_owned) replay_owned->detach();
+    }
+
     std::uint32_t id = 0;
     std::unique_ptr<MediaSource> source;
 

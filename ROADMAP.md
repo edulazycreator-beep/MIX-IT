@@ -10,7 +10,7 @@ A milestone is closed only when its exit criteria are met **on Windows**.
 | 3 | First working video pipeline / video engine | IMPLEMENTED — tested on Linux + Windows CI; reference-hardware run, real capture devices and GPU measurements pending (details below) | file → GPU → preview/program → cut, 1080p60 without drops on reference HW; native monitors in WPF |
 | 4 | Audio engine | IMPLEMENTED — tested on Linux + Windows CI; real audio devices, ASIO (licence decision) and commercial plug-ins pending (details below) | WASAPI (+ASIO) capture, mixer, buses, DSP, meters/LUFS, sync; no underruns in 1 h soak; VST3 host design (out-of-process) |
 | 5 | Streaming and recording | IMPLEMENTED — tested on Linux + Windows CI; hardware encoders and real platforms pending | RTMP/RTMPS/SRT/HLS multi-destination with isolation; NVENC/QSV/AMF detection; program + ISO recording with recovery |
-| 6 | Graphics and production | IN_PROGRESS | titles/overlays/chroma/luma key, multiview, replay, virtual sets (2D); HTML renderer ADR |
+| 6 | Graphics and production | IMPLEMENTED — tested on Linux + Windows CI; HTML graphics deferred (renderer decision), replay audio and 3D sets not in scope; real green-screen footage and GPU keyer on hardware pending (details below) | titles/overlays/chroma/luma key, multiview, replay, virtual sets (2D); HTML renderer ADR |
 | 7 | Advanced features | PLANNED | command API, macros/automation, remote control (documented protocol), PTZ, tally, plugin SDK |
 | 8 | Desktop experience | PLANNED | full operator UI, workspace customization, profiles, diagnostics dashboard, performance presets |
 | 9 | Commercial release | PLANNED | Free/Professional licensing (signed licences, offline grace), installer, compatibility lab, legal review, docs |
@@ -93,3 +93,18 @@ A milestone is closed only when its exit criteria are met **on Windows**.
 | Isolation, reconnect, statistics, credential redaction | TESTED | |
 | Desktop Streaming & Recording | TESTED (automated) | self-test records |
 | Exit: 1 h stream + recording on hardware | PENDING | Windows workstation |
+
+## Milestone 6 — Graphics and production (detail)
+
+| Deliverable | Status | Evidence / note |
+|---|---|---|
+| Chroma and luma key per layer (CPU + D3D11) | TESTED | pixel tests; D3D11 compared with the CPU reference on WARP |
+| Overlay channels (4) with fades, across cuts, audio-follows-video | TESTED | `Buses.OverlayChannelStaysOnAirAcrossCutsAndFades` |
+| Graphics inputs: JSON scenes, FreeType text, images, fields, clock, timers | TESTED | render tests; lower third on an overlay with live fields and timer |
+| Title templates + Graphics Studio | TESTED (automated) | self-test: lower third on air |
+| Multiview (bus + output source) | TESTED | `Buses.MultiviewShowsPreviewProgramInputsAndTally`, `Outputs.RecordsTheMultiview`, self-test monitor |
+| Instant replay, slow motion, mark in, pause | TESTED | `Replay.SlowMotionPlaybackOfARecordedInput` (flash cadence doubles at 50 %), managed and self-test |
+| Virtual set 2D (keyed presenter on an overlay over a background, placement presets) | IMPLEMENTED (basic) | built from tested keys + overlays; no dedicated test with real footage |
+| HTML/browser graphics | PLANNED | renderer ADR (CEF vs WebView2) pending |
+| Replay audio, playlists, highlight export | PLANNED | later |
+| Exit: real green-screen camera keyed on reference hardware | PENDING | Windows workstation |
