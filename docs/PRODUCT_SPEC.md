@@ -89,7 +89,12 @@ Status: PLANNED · IN_PROGRESS · EXPERIMENTAL · IMPLEMENTED · TESTED · PRODU
 | Replay audio, playlists, highlight clips | PLANNED | later |
 | Multiview (preview, program, 8 inputs, labels, tally) on screen and as a recording/stream source | TESTED | M6 |
 | External display outputs, clean feed, NDI output | PLANNED | M8 / vendor SDK |
-| Macros, scheduled/triggered automation, remote control API | PLANNED | M7 |
-| PTZ, tally | PLANNED | M7 |
+| Command layer shared by UI, macros, automation, remote and extensions (35+ commands) | TESTED | M7 |
+| Macros (text, stop-on-error, cancel), automation rules (daily/once/interval/start/stop, armed only) | TESTED | M7 |
+| Remote control API: HTTP + WebSocket, token, browser control page (docs/REMOTE_API.md) | TESTED (automated clients) | M7 |
+| Tally: engine-derived, remote events, TSL UMD v5.0 over UDP | EXPERIMENTAL (packet format tested; no tally hardware) | M7 |
+| PTZ: VISCA over IP (Sony UDP, raw UDP/TCP), presets, move, zoom | EXPERIMENTAL (bytes tested; no camera) | M7 |
+| Extension SDK (MixIt.SDK) and loader | EXPERIMENTAL | M7 |
+| OSC/MIDI/Stream Deck control, HTTPS remote, out-of-process extensions | PLANNED | later |
 | Projects (SQLite + JSON import/export, schema migration) | PLANNED | M2/M8 |
 | Free / Professional licensing | PLANNED | M9 |

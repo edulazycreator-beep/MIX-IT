@@ -12,6 +12,7 @@ build. "Redistributed" means it ships with the product. Not legal advice;
 | .NET 10 runtime + BCL | 10.0.x (SDK pinned via `global.json` 10.0.100, rollForward latestFeature) | MIT | dotnet.microsoft.com | all managed code | Yes (framework-dependent or self-contained) | Include .NET third-party notices if self-contained. |
 | WPF (Microsoft.WindowsDesktop.App) | 10.0.x | MIT | github.com/dotnet/wpf | Desktop | Via .NET runtime | — |
 | Microsoft.Extensions.Logging.Abstractions | 10.0.0 | MIT | nuget.org | Core | Yes | Keep copyright notice. |
+| ASP.NET Core shared framework (Kestrel) | with .NET 10 SDK/runtime | MIT | Microsoft (.NET) | MixIt.Remote (remote control, M7, ADR-0012) | Yes — included in the self-contained package | Keep copyright notice (covered by the .NET runtime notices shipped with the package). |
 | Microsoft.Extensions.Logging | 10.0.0 | MIT | nuget.org | Desktop | Yes | Keep copyright notice. |
 | Microsoft.Extensions.Logging.Debug | 10.0.0 | MIT | nuget.org | Desktop | Yes | Keep copyright notice. |
 | Microsoft.Extensions.DependencyInjection | 10.0.0 | MIT | nuget.org | Desktop | Yes | Keep copyright notice. |

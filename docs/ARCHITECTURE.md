@@ -97,7 +97,10 @@ mixit/
 ├─ managed/                   .NET 10 projects
 │  ├─ Directory.Build.props / .targets / Directory.Packages.props
 │  ├─ MixIt.Interop/          P/Invoke layer (BCL only)
-│  ├─ MixIt.Core/             application services (engine host, production service)
+│  ├─ MixIt.Core/             application services (engine host, production service, Control/: commands, macros, automation, tally, PTZ, extensions)
+│  ├─ MixIt.Protocol/         remote-control and extension contracts (no dependencies)
+│  ├─ MixIt.SDK/              extension interfaces (depends on Protocol only)
+│  ├─ MixIt.Remote/           remote-control server (Kestrel HTTP + WebSocket)
 │  ├─ MixIt.Probe/            mixit-probe diagnostics CLI
 │  ├─ MixIt.Desktop/          WPF application
 │  └─ tests/MixIt.Tests/      xUnit tests (use the real native engine)
@@ -107,10 +110,10 @@ mixit/
 └─ .github/workflows/ci.yml   Windows + Linux CI (build, tests, package, self-test)
 ```
 
-Modules named in CLAUDE.md that do not exist yet — `MixIt.SDK`,
-`MixIt.Protocol`, `MixIt.Licensing` — are **not** created as empty shells.
-Each is created in the milestone that gives it content (Protocol/SDK: M7,
-Licensing: M9), per the "avoid unnecessary abstractions" rule.
+`MixIt.Protocol` and `MixIt.SDK` were created in M7 with real content
+(ADR-0012). `MixIt.Licensing` is created in M9, per the "avoid unnecessary
+abstractions" rule. Dependency direction: Desktop → Remote → Core →
+(Interop, SDK → Protocol); clients and extensions need only Protocol/SDK.
 
 ---
 
@@ -238,4 +241,5 @@ Details and raw results: [TEST_REPORT.md](TEST_REPORT.md).
 - [ADR-0008](adr/0008-vst3-in-process-host.md) VST3 effects hosted in the engine process (first version; out-of-process host planned)
 - [ADR-0009](adr/0009-audio-engine-timeline-and-device-clock-bridge.md) Audio engine on the session sample timeline, drift bridge to device clocks
 - [ADR-0010](adr/0010-outputs-shared-encoders-isolated-destinations.md) Outputs: shared encoders, isolated destinations, timeline timestamps
+- [ADR-0012](adr/0012-command-layer-remote-control.md) One command layer for UI/macros/automation/remote/extensions; Kestrel remote control; TSL tally; VISCA PTZ
 - [ADR-0011](adr/0011-graphics-keys-multiview-replay.md) Graphics as inputs (FreeType, JSON scenes), layer keyers, overlay channels, multiview bus, in-memory JPEG replay
