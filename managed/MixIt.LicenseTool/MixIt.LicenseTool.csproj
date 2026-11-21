@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    mixit-license — the publisher's licence tool (M9). Creates the signing key
+    pair and issues licence files. NOT shipped to customers; the private key
+    never goes into the repository or CI logs.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>mixit-license</AssemblyName>
+    <RootNamespace>MixIt.LicenseTool</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MixIt.Licensing\MixIt.Licensing.csproj" />
+  </ItemGroup>
+</Project>

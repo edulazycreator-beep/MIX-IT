@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    MixIt.Licensing — Free and Professional editions (M9, ADR-0013): offline
+    licence files signed with ECDSA P-256 by the publisher, verified with the
+    public key given at build time (MixItLicensePublicKey). No secrets here.
+  -->
+  <PropertyGroup>
+    <RootNamespace>MixIt.Licensing</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <PropertyGroup>
+    <!-- CI passes the repository variable MIXIT_LICENSE_PUBLIC_KEY as an environment variable. -->
+    <MixItLicensePublicKey Condition="'$(MixItLicensePublicKey)' == ''">$(MIXIT_LICENSE_PUBLIC_KEY)</MixItLicensePublicKey>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The publisher's public key (base64 SubjectPublicKeyInfo), from the build: -p:MixItLicensePublicKey=... -->
+    <AssemblyMetadata Include="MixItLicensePublicKey" Value="$(MixItLicensePublicKey)" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MixIt.Tests" />
+  </ItemGroup>
+</Project>

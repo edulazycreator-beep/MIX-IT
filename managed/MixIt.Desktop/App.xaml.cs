@@ -9,6 +9,7 @@ using MixIt.Core.Production;
 using MixIt.Desktop.Services;
 using MixIt.Desktop.ViewModels;
 using MixIt.Interop;
+using MixIt.Licensing;
 using MixIt.Remote;
 
 namespace MixIt.Desktop;
@@ -77,6 +78,11 @@ public partial class App : Application
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<StatusBarViewModel>();
         services.AddSingleton<InputManagerViewModel>();
+        // M9 licensing: offline licence files verified with the publisher key of this build.
+        services.AddSingleton(_ => new LicenseService(
+            selfTest ? Path.Combine(Path.GetTempPath(), "mixit-selftest-license.mixit-license") : LicenseService.DefaultPath(),
+            LicenseFormat.BuiltInPublicKey()));
+        services.AddSingleton<LicenseViewModel>();
         services.AddSingleton<DiagnosticsViewModel>();
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<MainWindow>();
@@ -103,12 +109,25 @@ public partial class App : Application
             MessageBox.Show(args.Exception.Message, "MIX IT — interface error", MessageBoxButton.OK, MessageBoxImage.Warning);
         };
 
+        // The edition decides what can be configured (never what is running).
+        LicenseService license = _services.GetRequiredService<LicenseService>();
+        ProductionService productionService = _services.GetRequiredService<ProductionService>();
+        productionService.Policy = selfTest ? EditionPolicy.Professional : license.Policy;  // self-test exercises every feature
+        license.Changed += (_, _) => productionService.Policy = license.Policy;
+
         // Control settings first: the Automation & Control view model reads them.
         ControlHost control = _services.GetRequiredService<ControlHost>();
         Task controlStart = control.StartAsync();
         var window = _services.GetRequiredService<MainWindow>();
         window.Show();
         Task init = _services.GetRequiredService<MainViewModel>().InitializeAsync();
+
+        // A show file passed on the command line (double-click on a .mixit file).
+        if (e.Args.Length == 1 && e.Args[0].EndsWith(ShowFile.Extension, StringComparison.OrdinalIgnoreCase))
+        {
+            string showPath = e.Args[0];
+            _ = OpenShowWhenReadyAsync(init, showPath);
+        }
 
         // CI / support check: drives the real Production Studio view model and
         // monitors, then exits with 0 (pass) or 1 (fail). See SelfTest.cs.
@@ -120,6 +139,22 @@ public partial class App : Application
                 control, controlStart, _services.GetRequiredService<SettingsViewModel>(), _services.GetRequiredService<StatusBarViewModel>(),
                 _services.GetRequiredService<ProductionService>(), _services.GetRequiredService<ILogger<App>>(), this);
         }
+    }
+
+    private async Task OpenShowWhenReadyAsync(Task engineStart, string path)
+    {
+        await engineStart;
+        var settings = _services!.GetRequiredService<SettingsViewModel>();
+        var main = _services.GetRequiredService<MainViewModel>();
+        try
+        {
+            settings.OpenShowFile(path);
+        }
+        catch (InvalidOperationException ex)
+        {
+            MessageBox.Show(ex.Message, "MIX IT — open show", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        main.SelectedSection = main.Sections.First(s => s.Title == "Production Studio");
     }
 
     protected override void OnExit(ExitEventArgs e)

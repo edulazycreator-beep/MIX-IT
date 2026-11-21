@@ -45,7 +45,20 @@ jobs:
       # MIXIT_PUBLISH_PACKAGE=true.
       - name: Release build (self-contained) and smoke/self-test MixIt.exe
         shell: pwsh
+        env:
+          # Publisher key for licence verification (public; set by the owner). Empty = Free-only build.
+          MIXIT_LICENSE_PUBLIC_KEY: ${{ vars.MIXIT_LICENSE_PUBLIC_KEY }}
         run: ./scripts/package-windows.ps1 -Output artifacts/MixIt-win-x64
+      - name: Installer (Inno Setup) — build and silent install/uninstall test
+        shell: pwsh
+        run: ./scripts/build-installer.ps1
+      - name: Upload installer (when publishing)
+        if: ${{ vars.MIXIT_PUBLISH_PACKAGE == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: MixIt-Setup-${{ github.sha }}
+          path: artifacts/MixIt-Setup-*.exe
+          if-no-files-found: error
       - name: Upload MixIt-win-x64 (M9 only)
         if: ${{ vars.MIXIT_PUBLISH_PACKAGE == 'true' }}
         uses: actions/upload-artifact@v4

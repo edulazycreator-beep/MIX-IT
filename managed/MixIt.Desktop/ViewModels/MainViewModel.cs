@@ -18,7 +18,7 @@ public sealed class MainViewModel : ObservableObject
 
     public MainViewModel(EngineHost host, DiagnosticsViewModel diagnostics, ProductionViewModel production,
         AudioMixerViewModel audioMixer, OutputsViewModel outputs, GraphicsViewModel graphics, ReplayViewModel replay, ControlViewModel control,
-        SettingsViewModel settings, StatusBarViewModel statusBar, InputManagerViewModel inputManager)
+        SettingsViewModel settings, StatusBarViewModel statusBar, InputManagerViewModel inputManager, LicenseViewModel license)
     {
         _host = host;
         Diagnostics = diagnostics;
@@ -30,6 +30,7 @@ public sealed class MainViewModel : ObservableObject
         Control = control;
         Settings = settings;
         InputManager = inputManager;
+        License = license;
         StatusBar = statusBar;
         settings.PropertyChanged += (_, e) =>
         {
@@ -47,7 +48,7 @@ public sealed class MainViewModel : ObservableObject
             new("Automation & Control", "Available — macros, automation, remote control API, tally, PTZ, extensions (M7)", true),
             new("Hardware Diagnostics", "Available", true),
             new("Settings & Workspace", "Available — show files, shortcuts, full-screen outputs (M8)", true),
-            new("License", "Planned — Milestone 9", false),
+            new("License", "Available — Free / Professional, offline licence files (M9)", true),
         ];
         _selectedSection = Sections.FirstOrDefault(s => s.IsAvailable && s.Title == settings.Workspace.LastSection) ?? Sections[0];
         Production.IsActive = ShowProduction;
@@ -74,6 +75,8 @@ public sealed class MainViewModel : ObservableObject
 
     public InputManagerViewModel InputManager { get; }
 
+    public LicenseViewModel License { get; }
+
     public StatusBarViewModel StatusBar { get; }
 
     public string WindowTitle => $"MIX IT — {Settings.ShowName}";
@@ -93,6 +96,7 @@ public sealed class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(ShowControl));
             OnPropertyChanged(nameof(ShowSettings));
             OnPropertyChanged(nameof(ShowInputManager));
+            OnPropertyChanged(nameof(ShowLicense));
             OnPropertyChanged(nameof(ShowPlaceholder));
             Production.IsActive = ShowProduction;  // monitors and meters poll only while visible
             AudioMixer.IsActive = ShowAudioMixer;
@@ -122,7 +126,9 @@ public sealed class MainViewModel : ObservableObject
 
     public bool ShowInputManager => SelectedSection.Title == "Input Manager";
 
-    public bool ShowPlaceholder => !ShowDiagnostics && !ShowProduction && !ShowAudioMixer && !ShowOutputs && !ShowGraphics && !ShowReplay && !ShowControl && !ShowSettings && !ShowInputManager;
+    public bool ShowLicense => SelectedSection.Title == "License";
+
+    public bool ShowPlaceholder => !ShowDiagnostics && !ShowProduction && !ShowAudioMixer && !ShowOutputs && !ShowGraphics && !ShowReplay && !ShowControl && !ShowSettings && !ShowInputManager && !ShowLicense;
 
     public string EngineStatus
     {

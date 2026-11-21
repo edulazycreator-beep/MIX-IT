@@ -4,6 +4,7 @@ using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
 using MixIt.Core.Control;
 using MixIt.Core.Production;
+using MixIt.Licensing;
 using MixIt.Protocol;
 using MixIt.Remote;
 
@@ -29,6 +30,7 @@ public sealed class ControlHost : IAsyncDisposable, IDisposable
 {
     private readonly ProductionService _production;
     private readonly ControlSettingsStore _store;
+    private readonly LicenseService _license;
     private readonly ILogger<ControlHost> _logger;
     private readonly DispatcherTimer _tallyTimer;
     private readonly DispatcherTimer _automationTimer;
@@ -36,7 +38,7 @@ public sealed class ControlHost : IAsyncDisposable, IDisposable
 
     public ControlHost(ProductionService production, CommandService commands, MacroRunner macros, AutomationScheduler automation,
         TallyService tally, PtzService ptz, ExtensionManager extensions, RemoteControlServer remote, ControlSettingsStore store,
-        ILogger<ControlHost> logger)
+        LicenseService license, ILogger<ControlHost> logger)
     {
         _production = production;
         Commands = commands;
@@ -47,6 +49,7 @@ public sealed class ControlHost : IAsyncDisposable, IDisposable
         Extensions = extensions;
         Remote = remote;
         _store = store;
+        _license = license;
         _logger = logger;
         ProductionCommands.Register(commands, production);
         macros.Register();
@@ -82,7 +85,11 @@ public sealed class ControlHost : IAsyncDisposable, IDisposable
         }
         _tallyTimer.Start();
         _automationTimer.Start();
-        if (Settings.ExtensionsEnabled) Extensions.LoadFolder(ExtensionManager.DefaultFolder());
+        if (Settings.ExtensionsEnabled)
+        {
+            if (_license.Policy.Extensions) Extensions.LoadFolder(ExtensionManager.DefaultFolder());
+            else _logger.LogWarning("{Message}", _license.Policy.Refusal("Extensions"));
+        }
         if (Settings.Remote.Enabled) await StartRemoteAsync().ConfigureAwait(true);
     }
 
@@ -146,6 +153,11 @@ public sealed class ControlHost : IAsyncDisposable, IDisposable
     public async Task StartRemoteAsync()
     {
         RemoteError = null;
+        if (!_license.Policy.RemoteControl)
+        {
+            RemoteError = _license.Policy.Refusal("Remote control");
+            return;
+        }
         try
         {
             await Remote.StartAsync(Settings.Remote).ConfigureAwait(true);

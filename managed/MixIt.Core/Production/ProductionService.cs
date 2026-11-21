@@ -109,6 +109,13 @@ public sealed partial class ProductionService : IDisposable
 
     public bool EngineAvailable => _host.State == EngineHostState.Running;
 
+    /// <summary>
+    /// What the licensed edition allows (M9). Checked only when the production is
+    /// configured — a running show is never changed by licensing. Default: no limits
+    /// (tests, tools); the desktop app sets it from the installed licence.
+    /// </summary>
+    public Licensing.EditionPolicy Policy { get; set; } = Licensing.EditionPolicy.Professional;
+
     /// <summary>Changes the production format (not while running). Inputs are kept.</summary>
     public void SetFormat(ProductionFormat format, CompositorPreference compositor = CompositorPreference.Auto)
     {
@@ -471,6 +478,9 @@ public sealed partial class ProductionService : IDisposable
 
     private ProductionInput AddSpec(InputSpec spec)
     {
+        if (spec.Kind != ProductionInputKind.AudioCapture
+            && _specs.Count(x => x.Kind != ProductionInputKind.AudioCapture) >= Policy.MaxVideoInputs)
+            throw new InvalidOperationException(Policy.Refusal($"More than {Policy.MaxVideoInputs} video inputs"));
         uint id = AddToSession(RequireSession(), spec);
         var input = new ProductionInput(id, spec.Name, spec.Kind, Describe(spec));
         _specs.Add(spec);
@@ -673,6 +683,7 @@ public sealed partial class ProductionService : IDisposable
     {
         RequireStopped("add inputs");
         if (seconds is < 5 or > 600) throw new ArgumentOutOfRangeException(nameof(seconds), "5..600 seconds");
+        if (!Policy.InstantReplay) throw new InvalidOperationException(Policy.Refusal("Instant replay"));
         InputSpec source = SpecOf(sourceInputId);
         if (source.Kind is ProductionInputKind.Replay or ProductionInputKind.AudioCapture)
             throw new InvalidOperationException("Replay needs an input with video (not a replay or audio input).");
@@ -768,6 +779,10 @@ public sealed partial class ProductionService : IDisposable
             source = _specs[index];
         }
         bool multiview = isoInputId is null && settings.SourceInputId == OutputSettings.MultiviewSource;
+        if (source is not null && !Policy.IsoRecording) throw new InvalidOperationException(Policy.Refusal("ISO recording"));
+        if (multiview && !Policy.MultiviewOutput) throw new InvalidOperationException(Policy.Refusal("Recording or streaming the multiview"));
+        if (settings.IsNetwork && _outputs.Count(o => o.Settings.IsNetwork) >= Policy.MaxStreams)
+            throw new InvalidOperationException(Policy.Refusal($"More than {Policy.MaxStreams} stream destination(s)"));
         var spec = new OutputSpec(_nextOutputId++, name.Trim(), settings with { SourceInputId = multiview ? OutputSettings.MultiviewSource : 0 }, source);
         NativeSession session = RequireSession();
         spec.NativeId = session.AddOutput(NativeSettings(spec, session));

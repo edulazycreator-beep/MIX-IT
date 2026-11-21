@@ -48,6 +48,8 @@ if ($env:FFMPEG_ROOT -and (Test-Path (Join-Path $env:FFMPEG_ROOT 'LICENSE.txt'))
     Copy-Item (Join-Path $env:FFMPEG_ROOT 'LICENSE.txt') (Join-Path $out 'FFMPEG_LICENSE.txt') -Force
 }
 Copy-Item (Join-Path $root 'docs/THIRD_PARTY_LICENSES.md') $out -Force
+Copy-Item (Join-Path $root 'docs/REMOTE_API.md') $out -Force
+Copy-Item (Join-Path $root 'docs/USER_GUIDE.md') $out -Force
 # MIT: the VST3 interface code compiled into mixit_engine.dll needs its licence text.
 $vst3Licence = Join-Path $root 'build/windows-msvc/_deps/vst3/pluginterfaces/LICENSE.txt'
 if (Test-Path $vst3Licence) { Copy-Item $vst3Licence (Join-Path $out 'VST3_PLUGINTERFACES_LICENSE.txt') -Force }
@@ -60,44 +62,38 @@ if (Test-Path $dejavuLicence) { Copy-Item $dejavuLicence (Join-Path $out 'DEJAVU
 $version = (Select-String -Path (Join-Path $root 'native/include/mixit/mixit_engine.h') -Pattern 'MIXIT_API_VERSION_(MAJOR|MINOR|PATCH) (\d+)').Matches |
     ForEach-Object { $_.Groups[2].Value }
 $commit = (git rev-parse --short HEAD 2>$null)
+$productVersion = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
 @"
-MIX IT $($version -join '.') (development build, commit $commit)
-=====================================================================
+MIX IT $productVersion (engine API $($version -join '.')) — Live Production & Broadcast Studio (preview, commit $commit)
+=====================================================================================
 
-This is an EARLY DEVELOPMENT BUILD (Milestones 1-3), not a production tool.
+Start MixIt.exe. Sections (left): Production Studio, Input Manager, Audio Mixer,
+Streaming & Recording, Graphics Studio, Replay & Multiview, Automation & Control,
+Hardware Diagnostics, Settings & Workspace, License. Each section shows its status.
 
-What works:
-  MixIt.exe        Operator shell with two working sections:
-                   * Production Studio (video only): add test-signal and media
-                     file inputs, preview/program monitors with tally, CUT,
-                     AUTO (mix / fade-through-black / wipe), picture-in-picture,
-                     production formats 720p/1080p at 25-60 fps. An optional
-                     GPU (Direct3D 11) compositor is EXPERIMENTAL.
-                   * Hardware Diagnostics: engine status, CPU/RAM/OS/GPU
-                     detection and the live engine log.
-                   All other sections are labelled "Planned".
-  mixit-probe.exe  Command-line diagnostics:
-                     mixit-probe.exe --verbose
-                     mixit-probe.exe --codecs
-                     mixit-probe.exe --session-test 60 --format 1920x1080@60000/1001
-                   The session test runs the synthetic production pipeline
-                   (test signal, frame sync, program bus, A/V sync check) and
-                   prints PASS/FAIL.
+Tested automatically (Windows CI, software rendering, no hardware attached):
+  switching (cut/mix/fade/wipe, PiP), test signals and media files, audio mixer
+  with DSP and loudness, recording (MP4/MOV/MKV, ISO), streaming to local
+  RTMP/SRT/HLS servers, titles and lower thirds, chroma/luma keys, overlay
+  channels, multiview, instant replay, macros, the remote-control API, show files.
 
-                   Add a media file as the second input:
-                     mixit-probe.exe --session-test 30 --file C:\path\clip.mp4
+EXPERIMENTAL / NOT YET VERIFIED ON REAL HARDWARE — test before a live event:
+  capture cards and webcams, the GPU (Direct3D 11) compositor on real GPUs,
+  hardware encoders (NVENC/QSV/AMF), streaming to real platforms (RTMPS),
+  WASAPI audio devices, commercial VST3 plug-ins, TSL tally, VISCA PTZ,
+  full-screen outputs on extra displays, extensions.
 
-                   Compare compositors on your hardware:
-                     mixit-probe.exe --session-test 30 --format 1920x1080@60 --compositor d3d11
+Editions: without a licence MIX IT runs as the Free edition (up to 4 video
+inputs, 1 stream destination; see License). Licences are checked offline.
 
-Not yet available: capture devices (cameras, HDMI), audio mixing and
-monitoring, streaming, recording, graphics/titles. Nothing is broadcast.
+Command-line diagnostics:  mixit-probe.exe --verbose | --codecs | --session-test 30
+Remote control API: docs in REMOTE_API.md (enable in Automation & Control).
 
-FFmpeg: the FFmpeg DLLs in this folder are an LGPL build (see FFMPEG_LICENSE.txt);
-the engine refuses to use non-LGPL FFmpeg builds.
-
-Requirements: Windows 10/11 x64. No .NET installation needed.
-Logs: %LOCALAPPDATA%\MixIt\logs\
+FFmpeg: the FFmpeg DLLs here are an LGPL build (FFMPEG_LICENSE.txt). Third-party
+notices: THIRD_PARTY_LICENSES.md and the *_LICENSE.txt files.
+Requirements: Windows 10/11 x64. No .NET installation needed. Not code-signed yet:
+Windows SmartScreen may warn on first start.
+Logs: %LOCALAPPDATA%\MixIt\logs\   Settings: %APPDATA%\MIX IT\
 "@ | Set-Content -Encoding UTF8 (Join-Path $out 'README.txt')
 
 if ($SkipSmokeTest) { return }
@@ -144,9 +140,9 @@ Write-Host '==> Self-test: MixIt.exe --self-test production' -ForegroundColor Cy
 # start, monitors, CUT, AUTO, PiP, stop) and exits 0 = PASS, 1 = FAIL.
 $startedAt = Get-Date
 $selfTest = Start-Process -FilePath (Join-Path $out 'MixIt.exe') -ArgumentList '--self-test', 'production' -PassThru
-if (-not $selfTest.WaitForExit(90000)) {
+if (-not $selfTest.WaitForExit(180000)) {
     Stop-Process -Id $selfTest.Id -Force
-    throw 'MixIt.exe --self-test production did not finish within 90 s'
+    throw 'MixIt.exe --self-test production did not finish within 180 s'
 }
 $log = Get-ChildItem $logDir -Filter 'mixit-*.jsonl' -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -ge $startedAt } | Sort-Object LastWriteTime | Select-Object -Last 1
