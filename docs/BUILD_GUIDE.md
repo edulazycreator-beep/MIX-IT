@@ -113,6 +113,21 @@ locally installed ASP.NET Core shared framework, and disables NuGet auditing.
 It exists only for restricted development environments — never use it for a
 release build.
 
+## Installer and licence key (M9)
+
+- `./scripts/package-windows.ps1` builds and self-tests the package folder;
+  `./scripts/build-installer.ps1` turns it into `MixIt-Setup-<VERSION>-x64.exe`
+  with Inno Setup 6 (installed from chocolatey when missing) and runs a silent
+  install/uninstall check.
+- Licence verification needs the publisher public key at build time:
+  `$env:MIXIT_LICENSE_PUBLIC_KEY = "<base64>"` (CI: repository variable of the
+  same name). Create the key pair once with
+  `dotnet run --project managed/MixIt.LicenseTool -- keygen <secure folder>`;
+  keep the private key offline and backed up. Issue a licence:
+  `… -- issue --key <private.pem> --to "Customer" [--expires 2027-12-31] [--machine <id>] --out customer.mixit-license`.
+- Publishing: the CI uploads the package and installer only when the
+  repository variable `MIXIT_PUBLISH_PACKAGE` is `true`.
+
 ## CMake options
 
 | Option | Default | Meaning |

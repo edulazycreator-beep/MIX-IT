@@ -144,8 +144,9 @@ public partial class App : Application
     private async Task OpenShowWhenReadyAsync(Task engineStart, string path)
     {
         await engineStart;
-        var settings = _services!.GetRequiredService<SettingsViewModel>();
-        var main = _services.GetRequiredService<MainViewModel>();
+        ServiceProvider services = _services ?? throw new InvalidOperationException("Not started.");
+        var settings = services.GetRequiredService<SettingsViewModel>();
+        var main = services.GetRequiredService<MainViewModel>();
         try
         {
             settings.OpenShowFile(path);

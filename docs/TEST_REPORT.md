@@ -1,5 +1,36 @@
 # MIX IT — Test Report
 
+## Run: Milestones 7–9 (control, desktop, release groundwork) — 2026-11-21
+
+### GitHub Actions
+
+| Run (commit) | Result |
+|---|---|
+| 44870966128 (6138bfd, M7) | ❌ Windows: `IOException` without `using System.IO` in the WPF project. |
+| 44872051800 (158ddf7) | ❌ Windows: self-test did not finish (async-only services could not be disposed by the DI container; the UI error dialog blocked the unattended run). Fixed in f9bced6. |
+| f9bced6 | ❌ Windows: NU1510 — DPAPI is part of the .NET 10 Windows Desktop framework (package reference removed). |
+| 44873736430 (bfb2d9d, M7+M8) | ✅ Windows: native 154/154, xUnit **56/56**, self-test PASS incl. macro, remote API (401 without token, state, command), tally, show save/open, shortcut, dashboard. Linux superseded by the next push. |
+| 1bb5e7a / later (M9) | see TEST_REPORT updates below / the run page |
+
+### Local
+
+| Check | Result |
+|---|---|
+| Managed (local runner, real native engine) | ✅ 59/59 |
+| `mixit-license` keygen → issue → verify; refuses to overwrite a key | ✅ |
+
+### New tests
+
+ControlTests (9): macro text round trip; commands drive the production and report errors (switching, transitions, PiP, audio, tally); macros in order / stop on error / nesting / cancellation / through commands; automation armed-only, no catch-up, daily/once/interval/start; TSL 5.0 packet bytes received over UDP; VISCA bytes (Sony framing and raw) received over UDP; remote API (token, state, commands, 404/400, WebSocket events and commands, macro run); extensions (commands, isolated failures, detach); control settings round trip and broken-file handling.
+ShowFileTests (1): full production round trip incl. protected stream key, key-less save warning, missing file, invalid file.
+LicensingTests (3): signature/tamper/expiry/PC binding/no key; service install/keep/remove/persist; Free limits at configuration time only.
+
+### Not verified (no hardware / services in CI)
+
+Tally receivers, PTZ cameras, LAN remote clients and control surfaces, extra
+displays, real extensions, installer on a clean consumer PC, SmartScreen
+behaviour of the unsigned installer.
+
 ## Run: Milestone 6 (graphics and production tools) — 2026-11-21
 
 ### GitHub Actions

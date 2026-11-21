@@ -19,7 +19,7 @@ Status: PLANNED · IN_PROGRESS · EXPERIMENTAL · IMPLEMENTED · TESTED · PRODU
 | Hardware encoder open-test (M5), audio devices (M4), storage free space per recording (M5); network interfaces | IMPLEMENTED / PLANNED (network) | M4–M5 |
 | Pipeline monitoring (ticks, lateness, drops, repeats, skips, A/V offset) | TESTED | M2 |
 | Runtime monitoring (CPU/GPU load, audio underruns, disk) | PLANNED | M3–M5 |
-| Performance presets (Low Resource → Professional) | PLANNED | M8 |
+| Performance presets (Low Resource → Professional) | PLANNED — needs profiling on reference hardware first | after M9 |
 | Hardware Diagnostics screen | IMPLEMENTED (starts in CI; hands-on use pending) | M1/M8 |
 
 ## Video
@@ -88,7 +88,8 @@ Status: PLANNED · IN_PROGRESS · EXPERIMENTAL · IMPLEMENTED · TESTED · PRODU
 | Instant replay with slow motion (0.1–2×, mark in, pause), video only | TESTED (Linux + Windows CI) | M6 |
 | Replay audio, playlists, highlight clips | PLANNED | later |
 | Multiview (preview, program, 8 inputs, labels, tally) on screen and as a recording/stream source | TESTED | M6 |
-| External display outputs, clean feed, NDI output | PLANNED | M8 / vendor SDK |
+| Full-screen output on another display (program/preview/multiview) | EXPERIMENTAL (not frame-locked; no multi-display test) | M8 |
+| Clean feed, NDI output, SDI (DeckLink) output | PLANNED | vendor SDK |
 | Command layer shared by UI, macros, automation, remote and extensions (35+ commands) | TESTED | M7 |
 | Macros (text, stop-on-error, cancel), automation rules (daily/once/interval/start/stop, armed only) | TESTED | M7 |
 | Remote control API: HTTP + WebSocket, token, browser control page (docs/REMOTE_API.md) | TESTED (automated clients) | M7 |
@@ -96,5 +97,7 @@ Status: PLANNED · IN_PROGRESS · EXPERIMENTAL · IMPLEMENTED · TESTED · PRODU
 | PTZ: VISCA over IP (Sony UDP, raw UDP/TCP), presets, move, zoom | EXPERIMENTAL (bytes tested; no camera) | M7 |
 | Extension SDK (MixIt.SDK) and loader | EXPERIMENTAL | M7 |
 | OSC/MIDI/Stream Deck control, HTTPS remote, out-of-process extensions | PLANNED | later |
-| Projects (SQLite + JSON import/export, schema migration) | PLANNED | M2/M8 |
-| Free / Professional licensing | PLANNED | M9 |
+| Show files (.mixit JSON, versioned; stream keys DPAPI-protected) | TESTED (managed tests + self-test) | M8 |
+| Workspace: last section, window placement, keyboard shortcuts → commands, Input Manager, dashboard strip | TESTED (self-test) | M8 |
+| Free / Professional licensing (offline signed licences, edition policy) | TESTED (crypto + policy); edition limits await owner confirmation | M9 |
+| Installer (Inno Setup, .mixit association, silent install test) | TESTED in CI; not code-signed | M9 |

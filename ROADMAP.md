@@ -12,8 +12,8 @@ A milestone is closed only when its exit criteria are met **on Windows**.
 | 5 | Streaming and recording | IMPLEMENTED — tested on Linux + Windows CI; hardware encoders and real platforms pending | RTMP/RTMPS/SRT/HLS multi-destination with isolation; NVENC/QSV/AMF detection; program + ISO recording with recovery |
 | 6 | Graphics and production | IMPLEMENTED — tested on Linux + Windows CI; HTML graphics deferred (renderer decision), replay audio and 3D sets not in scope; real green-screen footage and GPU keyer on hardware pending (details below) | titles/overlays/chroma/luma key, multiview, replay, virtual sets (2D); HTML renderer ADR |
 | 7 | Advanced features | IMPLEMENTED — command layer, macros, automation, remote API tested; tally/PTZ/extensions EXPERIMENTAL (no hardware) | command API, macros/automation, remote control (documented protocol), PTZ, tally, plugin SDK |
-| 8 | Desktop experience | PLANNED | full operator UI, workspace customization, profiles, diagnostics dashboard, performance presets |
-| 9 | Commercial release | PLANNED | Free/Professional licensing (signed licences, offline grace), installer, compatibility lab, legal review, docs |
+| 8 | Desktop experience | IMPLEMENTED — show files, Input Manager, shortcuts, dashboard, workspace, Settings section tested; full-screen outputs EXPERIMENTAL; performance presets and GPU swap-chain monitors deferred | full operator UI, workspace customization, profiles, diagnostics dashboard, performance presets |
+| 9 | Commercial release | IMPLEMENTED (preview 0.9.0) — licensing, installer, user guide, packaging; owner items open: code-signing, publisher key, edition limits, H.264/AAC licensing, activation server, hardware compatibility lab | Free/Professional licensing (signed licences, offline grace), installer, compatibility lab, legal review, docs |
 
 ## Milestone 1 — Foundation (detail)
 

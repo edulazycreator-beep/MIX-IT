@@ -101,6 +101,8 @@ mixit/
 │  ├─ MixIt.Protocol/         remote-control and extension contracts (no dependencies)
 │  ├─ MixIt.SDK/              extension interfaces (depends on Protocol only)
 │  ├─ MixIt.Remote/           remote-control server (Kestrel HTTP + WebSocket)
+│  ├─ MixIt.Licensing/        editions, signed offline licences (no dependencies)
+│  ├─ MixIt.LicenseTool/      mixit-license: publisher key + licence issuing (not shipped)
 │  ├─ MixIt.Probe/            mixit-probe diagnostics CLI
 │  ├─ MixIt.Desktop/          WPF application
 │  └─ tests/MixIt.Tests/      xUnit tests (use the real native engine)
@@ -110,9 +112,8 @@ mixit/
 └─ .github/workflows/ci.yml   Windows + Linux CI (build, tests, package, self-test)
 ```
 
-`MixIt.Protocol` and `MixIt.SDK` were created in M7 with real content
-(ADR-0012). `MixIt.Licensing` is created in M9, per the "avoid unnecessary
-abstractions" rule. Dependency direction: Desktop → Remote → Core →
+`MixIt.Protocol` and `MixIt.SDK` were created in M7 (ADR-0012) and
+`MixIt.Licensing` in M9 (ADR-0013), each when it had real content. Dependency direction: Desktop → Remote → Core →
 (Interop, SDK → Protocol); clients and extensions need only Protocol/SDK.
 
 ---
@@ -241,5 +242,6 @@ Details and raw results: [TEST_REPORT.md](TEST_REPORT.md).
 - [ADR-0008](adr/0008-vst3-in-process-host.md) VST3 effects hosted in the engine process (first version; out-of-process host planned)
 - [ADR-0009](adr/0009-audio-engine-timeline-and-device-clock-bridge.md) Audio engine on the session sample timeline, drift bridge to device clocks
 - [ADR-0010](adr/0010-outputs-shared-encoders-isolated-destinations.md) Outputs: shared encoders, isolated destinations, timeline timestamps
+- [ADR-0013](adr/0013-licensing-and-release.md) Offline signed licences, edition policy enforced at configuration time, Inno Setup installer
 - [ADR-0012](adr/0012-command-layer-remote-control.md) One command layer for UI/macros/automation/remote/extensions; Kestrel remote control; TSL tally; VISCA PTZ
 - [ADR-0011](adr/0011-graphics-keys-multiview-replay.md) Graphics as inputs (FreeType, JSON scenes), layer keyers, overlay channels, multiview bus, in-memory JPEG replay

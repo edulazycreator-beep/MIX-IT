@@ -1,7 +1,36 @@
 # Changelog
 
-All notable changes to MIX IT. Format: Keep a Changelog; versions follow the
-native API version until the first product release.
+All notable changes to MIX IT. Format: Keep a Changelog. Up to 0.6.0 versions
+followed the native API version; from 0.9.0 the product has its own version
+(`/VERSION`) and the C ABI stays versioned separately (API 0.6.x).
+
+## [0.9.0] — 2026-11-21 — Milestones 7–9: control, desktop experience, release groundwork (preview)
+
+### Added — M7 Advanced features (ADR-0012)
+- Command layer shared by the UI, macros, automation, the remote API and extensions (~40 commands; inputs by number, `id:N` or name); runs on the production thread.
+- Macros (text format, stop-on-error, nesting/concurrency limits, cancellable waits) and automation rules (daily, once, interval, production start/stop) that only run when **armed**.
+- Remote control API 1.0 (`docs/REMOTE_API.md`): Kestrel HTTP + WebSocket, 256-bit bearer token, localhost by default, bounded per-client event queues, browser control page.
+- Tally from engine state (program incl. transitions, PiP, overlays) on the event stream and as TSL UMD v5.0 over UDP (experimental).
+- PTZ over VISCA-IP (Sony UDP framing, raw UDP/TCP): presets, move, zoom, home (experimental).
+- Extension SDK (`MixIt.SDK`, `MixIt.Protocol`) and loader with per-extension load contexts and isolated failures (experimental).
+- Automation & Control section (macros, rules, remote, tally, PTZ, extensions).
+
+### Added — M8 Desktop experience
+- Show files (`.mixit`): format, inputs, names, audio strips, graphics, replays, overlays, PiP, outputs, buses; stream keys only DPAPI-protected; problems on open are listed.
+- Settings & Workspace section: show new/open/save/recent, keyboard shortcuts mapped to commands (defaults: Space cut, Enter auto, 1–9 preview, Ctrl+1–9 program, F1–F4 overlays), full-screen output on another display (experimental), data folders; window placement and last section remembered.
+- Input Manager (numbers, rename, tally, PVW/PGM, remove) and a production dashboard strip (clock, ON AIR, timing, REC/LIVE/problems, remote/automation, CPU/RAM).
+
+### Added — M9 Release groundwork (ADR-0013)
+- Free / Professional editions: offline licence files signed with ECDSA P-256, publisher key injected at build time, optional expiry and PC binding; edition limits enforced only when configuring (proposal for the owner); License section; `mixit-license` publisher tool.
+- Inno Setup installer with `.mixit` association; CI builds it and tests a silent install/uninstall.
+- `docs/USER_GUIDE.md`; rewritten package README.
+
+### Fixed
+- Self-test hang: the DI container could not dispose async-only services and the resulting error opened a modal dialog. Services dispose synchronously with bounded waits; unattended runs never show dialogs.
+- Replay inputs are named after the input's current label.
+
+### Tests
+- Managed 59 (+13: control, show files, licensing); native 154 unchanged; the Windows self-test now also runs a macro, the remote API, tally, show save/open, a shortcut and the dashboard.
 
 ## [0.6.0] — 2026-11-21 — Milestone 6: Graphics and production tools
 
