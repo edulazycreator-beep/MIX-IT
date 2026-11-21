@@ -138,6 +138,9 @@
             <views:ControlView DataContext="{Binding Control}"
                                Visibility="{Binding DataContext.ShowControl, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
 
+            <views:InputManagerView DataContext="{Binding InputManager}"
+                                    Visibility="{Binding DataContext.ShowInputManager, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
+
             <views:SettingsView DataContext="{Binding Settings}"
                                 Visibility="{Binding DataContext.ShowSettings, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
 

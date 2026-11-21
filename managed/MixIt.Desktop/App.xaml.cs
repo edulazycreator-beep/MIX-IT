@@ -76,6 +76,7 @@ public partial class App : Application
             sp.GetRequiredService<ILogger<WorkspaceStore>>()));
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<StatusBarViewModel>();
+        services.AddSingleton<InputManagerViewModel>();
         services.AddSingleton<DiagnosticsViewModel>();
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<MainWindow>();

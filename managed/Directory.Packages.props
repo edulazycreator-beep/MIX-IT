@@ -11,8 +11,6 @@
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
-    <!-- Windows DPAPI for stream keys in show files (Desktop only, M8) -->
-    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
 
     <!-- Test-only dependencies (not redistributed) -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
