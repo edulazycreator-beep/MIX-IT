@@ -67,7 +67,7 @@ extern "C" {
 #define MIXIT_VERSION_PATCH(v) ((v) & 0xFFFu)
 
 #define MIXIT_API_VERSION_MAJOR 0
-#define MIXIT_API_VERSION_MINOR 4
+#define MIXIT_API_VERSION_MINOR 5
 #define MIXIT_API_VERSION_PATCH 0
 #define MIXIT_API_VERSION \
     MIXIT_MAKE_VERSION(MIXIT_API_VERSION_MAJOR, MIXIT_API_VERSION_MINOR, MIXIT_API_VERSION_PATCH)
@@ -890,6 +890,94 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_set_audio_insert_parameter(mixit
 MIXIT_API mixit_result MIXIT_CALL mixit_session_get_audio_insert_state(mixit_session session, uint32_t input_id,
                                                                         uint32_t slot, uint8_t* buffer,
                                                                         uint32_t capacity, uint32_t* out_size);
+
+/* ---- Outputs: recording and streaming (API 0.5, M5) ---------------------------
+ * An output encodes the program (or one input: ISO recording) as H.264 + AAC
+ * and writes it to a file or a network destination. Outputs with identical
+ * source and encoder settings share one encoder. Every destination has its
+ * own thread and queue: a slow or broken destination drops its own packets
+ * (up to the next keyframe, counted) or reconnects; it never blocks the
+ * session or other destinations. */
+
+#define MIXIT_OUTPUT_FLAG_NOT_FRAGMENTED 0x1u /* MP4/MOV: classic layout (not playable after a crash) */
+#define MIXIT_OUTPUT_FLAG_NO_RECONNECT   0x2u /* network: fail instead of retrying */
+
+typedef struct mixit_output_config {
+    uint32_t    struct_size;
+    uint32_t    source_input;    /* 0 = program; otherwise an input id (ISO, the input's own size and clean audio) */
+    const char* url;             /* file path (UTF-8), rtmp://, rtmps://, srt://, udp://, or *.m3u8 (HLS) */
+    const char* format;          /* NULL/"" = from the url; else mp4, mov, matroska, mpegts, flv, hls */
+    const char* video_encoder;   /* NULL/"" = automatic (hardware first); else an FFmpeg encoder name */
+    uint32_t    video_kbps;      /* 0 = 6000; 100..200000 */
+    uint32_t    keyframe_ms;     /* 0 = 2000; 250..10000 */
+    uint32_t    audio_kbps;      /* 0 = 160; 32..512 */
+    uint32_t    flags;           /* MIXIT_OUTPUT_FLAG_* */
+    uint32_t    segment_seconds; /* files: 0 = one file, else a new file (name_0001.ext, ...) every N >= 2 s at a keyframe */
+    uint32_t    reserved;        /* 0 */
+} mixit_output_config;
+
+/* Any time (validated here, encoded only once started). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_output(mixit_session session, const mixit_output_config* config,
+                                                            uint32_t* out_output_id);
+/* Only while the output is not started. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_remove_output(mixit_session session, uint32_t output_id);
+/* Session must be RUNNING. Opens the encoder (errors such as "no usable
+ * H.264 encoder" are returned here); the destination connects in the
+ * background (see stats). */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_start_output(mixit_session session, uint32_t output_id);
+/* Asynchronous: the destination drains and finalizes (state STOPPING, then
+ * IDLE). Stopping the session stops every output and waits until files are
+ * finalized. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_stop_output(mixit_session session, uint32_t output_id);
+
+#define MIXIT_OUTPUT_IDLE         0
+#define MIXIT_OUTPUT_STARTING     1
+#define MIXIT_OUTPUT_RUNNING      2
+#define MIXIT_OUTPUT_RECONNECTING 3
+#define MIXIT_OUTPUT_STOPPING     4
+#define MIXIT_OUTPUT_FAILED       5
+
+#define MIXIT_OUTPUT_STATS_HARDWARE_ENCODER 0x1u
+#define MIXIT_OUTPUT_STATS_DATA_LOST        0x2u /* files: packets were dropped (drive too slow/full) */
+
+typedef struct mixit_output_stats {
+    uint32_t struct_size;
+    int32_t  state;                  /* MIXIT_OUTPUT_* */
+    uint32_t flags;                  /* MIXIT_OUTPUT_STATS_* */
+    uint32_t segments;               /* files written (incl. the current one) */
+    uint64_t bytes_written;
+    uint64_t video_packets;
+    uint64_t audio_packets;
+    uint64_t dropped_packets;        /* this destination fell behind */
+    uint64_t encoder_dropped_frames; /* the (shared) encoder could not keep up */
+    uint64_t reconnects;
+    uint32_t bitrate_kbps;           /* written, last ~2 s */
+    uint32_t queue_ms;               /* buffered for this destination */
+    int64_t  duration_ns;            /* media time written */
+    int64_t  free_bytes;             /* files: free space on the drive, -1 unknown */
+    char     encoder[32];
+    char     current_file[512];
+    char     last_error[256];
+} mixit_output_stats;
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_output_stats(mixit_session session, uint32_t output_id,
+                                                                  mixit_output_stats* out_stats);
+
+#define MIXIT_ENCODER_HARDWARE 0x1u
+#define MIXIT_ENCODER_USABLE   0x2u /* opened successfully on this machine */
+
+typedef struct mixit_video_encoder_info {
+    uint32_t struct_size;
+    uint32_t flags;          /* MIXIT_ENCODER_* */
+    char     name[32];       /* pass as mixit_output_config.video_encoder */
+    char     long_name[128];
+    char     error[192];     /* why it is not usable */
+} mixit_video_encoder_info;
+
+/* H.264 encoders known to this build, preferred first, each open-tested
+ * (slow: hardware probing; not on a UI thread). NOT_SUPPORTED without FFmpeg. */
+MIXIT_API mixit_result MIXIT_CALL mixit_query_video_encoders(mixit_video_encoder_info* encoders, uint32_t capacity,
+                                                              uint32_t* out_count);
 
 #ifdef __cplusplus
 } /* extern "C" */

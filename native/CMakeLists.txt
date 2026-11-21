@@ -12,6 +12,7 @@ set(MIXIT_CORE_SOURCES
     src/abi/session_abi.cpp
     src/abi/audio_abi.cpp
     src/abi/vst3_abi.cpp
+    src/abi/output_abi.cpp
     src/core/engine.cpp
     src/core/last_error.cpp
     src/logging/json.cpp
@@ -29,6 +30,7 @@ set(MIXIT_CORE_SOURCES
     src/audio/audio_device.cpp
     src/audio/audio_device_wasapi.cpp
     src/audio/vst3_host.cpp
+    src/output/output.cpp
     src/media/test_signal.cpp
     src/media/test_signal_source.cpp
     src/media/time_base.cpp

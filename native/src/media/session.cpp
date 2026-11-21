@@ -82,6 +82,16 @@ Status Session::create(const SessionConfig& config, Logger& logger, std::unique_
     // Latency of frame sync: one output period plus 2 ms scheduling margin.
     s->latency_ns_ = duration_of_index(0, config.frame_rate) + 2'000'000;
     s->init_audio();
+    {
+        output::Timeline tl;
+        tl.frame_rate = config.frame_rate;
+        tl.sample_rate = config.sample_rate;
+        tl.channels = config.channels;
+        tl.program_width = config.width;
+        tl.program_height = config.height;
+        Session* raw = s.get();
+        s->outputs_ = std::make_unique<output::OutputManager>(tl, logger, [raw] { raw->wait_feed_quiescent(); });
+    }
     logger.logf(MIXIT_LOG_INFO, "session", "session created: {}x{} @ {} fps, {} Hz x{} ch", config.width,
                 config.height, rate_text(config.frame_rate), config.sample_rate, config.channels);
     out = std::move(s);
@@ -337,6 +347,7 @@ Status Session::stop() {
     const SessionState st = state();
     if (st == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
     if (st != SessionState::Running) return Status::ok();
+    outputs_->stop_all();  // finalize recordings while frames still flow
     stop_threads();
     state_.store(SessionState::Stopped, std::memory_order_release);
     logger_.logf(MIXIT_LOG_INFO, "session", "session stopped after {} ticks ({} late, {} skipped)", ticks_.load(),
@@ -347,6 +358,7 @@ Status Session::stop() {
 void Session::close() noexcept {
     std::lock_guard lock(control_mutex_);
     if (state() == SessionState::Closed) return;
+    if (outputs_) outputs_->stop_all();
     stop_threads();
     output_bus_.store(-1, std::memory_order_release);
     output_.reset();
@@ -470,6 +482,11 @@ bool Session::render_bus(const BusScene& a, const BusScene* b, TransitionKind ki
 
 void Session::output_loop() noexcept {
     os::set_current_thread_name("mixit-tick");
+    video_running_.store(true, std::memory_order_seq_cst);
+    struct Done {
+        std::atomic<bool>& flag;
+        ~Done() { flag.store(false, std::memory_order_seq_cst); }
+    } done{video_running_};
     const Rate rate = config_.frame_rate;
     const std::int64_t period = duration_of_index(0, rate);
     std::int64_t n = 0;
@@ -527,6 +544,10 @@ void Session::output_loop() noexcept {
         }
         if (out.info.input_id == 0 && !tr.active) program_black_frames_.fetch_add(1, std::memory_order_relaxed);
         program_frames_.fetch_add(1, std::memory_order_relaxed);
+        if (out.frame && outputs_->wants(0)) outputs_->feed_video(0, out.frame, static_cast<std::uint64_t>(n));
+        for (auto& in : inputs_) {  // ISO recordings take each input's frame of this tick
+            if (in->current && outputs_->wants(in->id)) outputs_->feed_video(in->id, in->current, static_cast<std::uint64_t>(n));
+        }
         (void)program_out_.push(std::move(out));
 
         // Preview is rendered only while someone is watching it.

@@ -45,8 +45,8 @@ TEST(EngineAbi, VersionAndBuildInfo) {
     const uint32_t v = mixit_get_api_version();
     EXPECT_EQ(v, MIXIT_API_VERSION);
     EXPECT_EQ(MIXIT_VERSION_MAJOR(v), 0u);
-    EXPECT_EQ(MIXIT_VERSION_MINOR(v), 4u);
-    EXPECT_NE(std::string(mixit_get_build_info()).find("MIX IT native engine 0.4.0"), std::string::npos);
+    EXPECT_EQ(MIXIT_VERSION_MINOR(v), static_cast<uint32_t>(MIXIT_API_VERSION_MINOR));
+    EXPECT_NE(std::string(mixit_get_build_info()).find("MIX IT native engine 0." + std::to_string(MIXIT_API_VERSION_MINOR) + ".0"), std::string::npos);
 }
 
 TEST(EngineAbi, ResultNames) {

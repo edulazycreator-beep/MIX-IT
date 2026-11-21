@@ -332,6 +332,7 @@ void Session::mix_block(std::int64_t k) noexcept {
         if (missing > 0 && in->fifo.head() > 0) {
             in->audio_underrun_frames.fetch_add(missing, std::memory_order_relaxed);
         }
+        if (outputs_->wants(in->id)) outputs_->feed_audio(in->id, mix_scratch_.data(), frames, first);  // ISO: clean input
         for (auto& slot : in->inserts) {
             if (audio::Vst3Effect* fx = slot.load(std::memory_order_acquire)) fx->process(mix_scratch_.data(), frames);
         }
@@ -372,6 +373,7 @@ void Session::mix_block(std::int64_t k) noexcept {
         bus.processor.process(bus.params.read(), bus_accumulators_[b].data(), frames);
         bus.meters.publish(bus.processor.meters());
         emit(bus, bus_accumulators_[b].data());
+        if (b == 0 && outputs_->wants(0)) outputs_->feed_audio(0, bus_accumulators_[0].data(), frames, first);
     }
     // Monitor (listen) bus: soloed strips (after fader) if any, else a copy of
     // the selected bus. Never feeds program.
@@ -565,6 +567,64 @@ Status Session::get_audio_insert_state(std::uint32_t input_id, std::uint32_t slo
     if (Status st = find_insert(input_id, slot, in); !st.is_ok()) return st;
     if (!in->insert_owned[slot]) return {MIXIT_E_NOT_FOUND, "insert slot is empty"};
     return in->insert_owned[slot]->get_state(out);
+}
+
+// ---- outputs ---------------------------------------------------------------------
+
+void Session::wait_feed_quiescent() noexcept {
+    const std::uint64_t audio0 = audio_epoch_.load(std::memory_order_seq_cst);
+    const std::uint64_t ticks0 = ticks_.load(std::memory_order_seq_cst);
+    const auto deadline = monotonic_ns() + 2'000'000'000ull;
+    while (((audio_running_.load() && audio_epoch_.load() < audio0 + 2) ||
+            (video_running_.load() && ticks_.load() < ticks0 + 2)) &&
+           monotonic_ns() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+Status Session::add_output(const output::OutputConfig& config, std::uint32_t& out_id) {
+    std::lock_guard lock(control_mutex_);
+    if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
+    if (config.source_input != 0) {
+        const Input* in = find_input(config.source_input);
+        if (in == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(config.source_input)};
+        if (!in->source->format().has_video) return {MIXIT_E_INVALID_ARGUMENT, "ISO recording needs an input with video"};
+    }
+    return outputs_->add(config, out_id);
+}
+
+Status Session::remove_output(std::uint32_t id) {
+    std::lock_guard lock(control_mutex_);
+    return outputs_->remove(id);
+}
+
+Status Session::start_output(std::uint32_t id) {
+    std::lock_guard lock(control_mutex_);
+    if (state() != SessionState::Running) return {MIXIT_E_INVALID_STATE, "start the session before its outputs"};
+    output::OutputConfig cfg;
+    if (Status st = outputs_->config(id, cfg); !st.is_ok()) return st;
+    std::uint32_t w = config_.width, h = config_.height;
+    bool has_audio = true;
+    if (cfg.source_input != 0) {
+        const Input* in = find_input(cfg.source_input);
+        if (in == nullptr) return {MIXIT_E_NOT_FOUND, "the output's input no longer exists"};
+        const SourceFormat& f = in->source->format();
+        w = f.width;
+        h = f.height;
+        has_audio = in->has_audio;
+    }
+    const Status st = outputs_->start(id, w, h, has_audio);
+    if (st.is_ok()) logger_.logf(MIXIT_LOG_INFO, "session", "output {} started ({})", id, cfg.url);
+    return st;
+}
+
+Status Session::stop_output(std::uint32_t id) {
+    std::lock_guard lock(control_mutex_);
+    return outputs_->stop(id);
+}
+
+Status Session::output_stats(std::uint32_t id, output::OutputStats& out) const {
+    return outputs_->stats(id, out);
 }
 
 }  // namespace mixit::media

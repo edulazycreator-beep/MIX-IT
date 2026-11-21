@@ -37,6 +37,7 @@
 #include "media/media_types.hpp"
 #include "media/test_signal.hpp"
 #include "media/time_base.hpp"
+#include "output/output.hpp"
 #include "util/triple_buffer.hpp"
 
 namespace mixit {
@@ -212,6 +213,13 @@ public:
     // Audio-only input from a capture device ("" = default; "mixit:null[:ppm]" = test device).
     Status add_audio_capture_source(const std::string& device_id, std::uint32_t& out_input_id);
 
+    // ---- outputs (M5): recording and streaming of the program or one input (ISO) ----
+    Status add_output(const output::OutputConfig& config, std::uint32_t& out_id);
+    Status remove_output(std::uint32_t id);
+    Status start_output(std::uint32_t id);  // session must be running
+    Status stop_output(std::uint32_t id);   // asynchronous; files are finalized
+    Status output_stats(std::uint32_t id, output::OutputStats& out) const;
+
     // ---- plug-in inserts (M4, EXPERIMENTAL): VST3 effects before the strip DSP ----
     static constexpr std::uint32_t kInsertSlots = 2;
     struct InsertInfo {
@@ -356,6 +364,11 @@ private:
     void retire_effect(std::unique_ptr<audio::Vst3Effect> fx) noexcept;
     Status find_insert(std::uint32_t input_id, std::uint32_t slot, Input*& out) const;  // control_mutex_ held
     std::atomic<std::int64_t> audio_max_lateness_ns_{0};
+    // Outputs: fed by the output and audio threads; declared last so encoders
+    // release their frame references before the pools go away.
+    std::atomic<bool> video_running_{false};
+    void wait_feed_quiescent() noexcept;
+    std::unique_ptr<output::OutputManager> outputs_;
 };
 
 }  // namespace mixit::media

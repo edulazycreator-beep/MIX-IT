@@ -8,7 +8,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
     <Deterministic>true</Deterministic>
-    <Version>0.4.0</Version>
+    <Version>0.5.0</Version>
     <Company>MIX IT</Company>
     <Product>MIX IT</Product>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(MixIt
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "MIX IT - Professional Live Production & Broadcast Studio (native engine)"
     LANGUAGES CXX)
 

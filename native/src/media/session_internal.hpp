@@ -21,12 +21,12 @@ namespace internal {
 
 constexpr std::uint32_t kInputVideoQueue = 4;
 // queue + pending + current + program queue (2) + reader cache + margin
-constexpr std::uint32_t kInputVideoPool = kInputVideoQueue + 8;
+constexpr std::uint32_t kInputVideoPool = kInputVideoQueue + 8 + 3;  // + ISO encoder queue
 constexpr std::uint32_t kInputAudioQueue = 32;  // 320 ms of 10 ms blocks
 // queue + file read-ahead (24) + margin
 constexpr std::uint32_t kInputAudioPool = kInputAudioQueue + 32;
 // program out (2) + reader cache (1) + preview out (2) + cache (1) + black (1) + in flight (1) + margin
-constexpr std::uint32_t kDefaultProgramPool = 10;
+constexpr std::uint32_t kDefaultProgramPool = 16;  // 10 + encoder queues (outputs, M5)
 constexpr std::int64_t kAvMatchWindowNs = 100'000'000;
 constexpr std::int64_t kFlashExpiryNs = 500'000'000;
 constexpr std::uint32_t kTapBlocks = 50;  // 500 ms per audio bus tap
