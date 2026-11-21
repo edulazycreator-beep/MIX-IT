@@ -1,4 +1,5 @@
 #include "media/session.hpp"
+#include "media/graphics_source.hpp"
 #include "media/session_internal.hpp"
 
 #include <algorithm>
@@ -151,6 +152,15 @@ Status Session::add_source(std::unique_ptr<MediaSource> source, std::uint32_t& o
     return Status::ok();
 }
 
+Status Session::with_graphics(std::uint32_t input_id, const std::function<Status(GraphicsSource&)>& fn) const {
+    std::lock_guard lock(control_mutex_);
+    const Input* in = find_input(input_id);
+    if (in == nullptr) return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(input_id)};
+    auto* g = dynamic_cast<GraphicsSource*>(in->source.get());
+    if (g == nullptr) return {MIXIT_E_INVALID_ARGUMENT, "input " + std::to_string(input_id) + " is not a graphics input"};
+    return fn(*g);
+}
+
 Status Session::add_input_locked(std::unique_ptr<MediaSource> source, std::uint32_t& out_input_id) {
     if (next_input_id_ > 255) return {MIXIT_E_NOT_SUPPORTED, "input id space exhausted for this session"};
     const std::uint32_t id = next_input_id_++;
@@ -248,22 +258,38 @@ Status Session::start_transition(TransitionKind kind, std::uint32_t frames) {
     return Status::ok();
 }
 
-Status Session::set_layer(Bus bus, std::uint32_t index, const LayerConfig& layer) {
-    if (bus != Bus::Program && bus != Bus::Preview) return {MIXIT_E_INVALID_ARGUMENT, "unknown bus"};
-    if (index >= kMaxLayersPerScene) {
-        return {MIXIT_E_INVALID_ARGUMENT, "layer index must be below " + std::to_string(kMaxLayersPerScene)};
-    }
+Status Session::validate_layer(const LayerConfig& layer) const {
     auto valid_rect = [](const NormRect& r) {
         return r.w > 0.0f && r.h > 0.0f && r.x >= -4.0f && r.y >= -4.0f && r.x + r.w <= 5.0f && r.y + r.h <= 5.0f;
     };
     auto valid_crop = [](const NormRect& r) {
         return r.w > 0.0f && r.h > 0.0f && r.x >= 0.0f && r.y >= 0.0f && r.x + r.w <= 1.0001f && r.y + r.h <= 1.0001f;
     };
-    if (layer.input_id != 0) {
-        if (!valid_rect(layer.dest)) return {MIXIT_E_INVALID_ARGUMENT, "layer destination rectangle out of range"};
-        if (!valid_crop(layer.crop)) return {MIXIT_E_INVALID_ARGUMENT, "layer crop must lie within the source (0..1)"};
-        if (!(layer.opacity >= 0.0f && layer.opacity <= 1.0f)) return {MIXIT_E_INVALID_ARGUMENT, "opacity must be 0..1"};
+    if (layer.input_id == 0) return Status::ok();
+    if (!valid_rect(layer.dest)) return {MIXIT_E_INVALID_ARGUMENT, "layer destination rectangle out of range"};
+    if (!valid_crop(layer.crop)) return {MIXIT_E_INVALID_ARGUMENT, "layer crop must lie within the source (0..1)"};
+    if (!(layer.opacity >= 0.0f && layer.opacity <= 1.0f)) return {MIXIT_E_INVALID_ARGUMENT, "opacity must be 0..1"};
+    const KeySettings& k = layer.key;
+    if (k.type != KeyType::None && k.type != KeyType::Chroma && k.type != KeyType::Luma) {
+        return {MIXIT_E_INVALID_ARGUMENT, "unknown key type"};
     }
+    auto unit = [](float v) { return v >= 0.0f && v <= 1.0f; };
+    if (k.type == KeyType::Chroma && (!unit(k.similarity) || !unit(k.spill) ||
+                                      !(k.smoothness > 0.0f && k.smoothness <= 1.0f) || k.color > 0xFFFFFFu)) {
+        return {MIXIT_E_INVALID_ARGUMENT, "chroma key: similarity/spill 0..1, smoothness > 0..1, colour 0xRRGGBB"};
+    }
+    if (k.type == KeyType::Luma && (!unit(k.threshold) || !(k.softness > 0.0f && k.softness <= 1.0f))) {
+        return {MIXIT_E_INVALID_ARGUMENT, "luma key: threshold 0..1, softness > 0..1"};
+    }
+    return Status::ok();
+}
+
+Status Session::set_layer(Bus bus, std::uint32_t index, const LayerConfig& layer) {
+    if (bus != Bus::Program && bus != Bus::Preview) return {MIXIT_E_INVALID_ARGUMENT, "unknown bus"};
+    if (index >= kMaxLayersPerScene) {
+        return {MIXIT_E_INVALID_ARGUMENT, "layer index must be below " + std::to_string(kMaxLayersPerScene)};
+    }
+    if (Status st = validate_layer(layer); !st.is_ok()) return st;
     std::lock_guard lock(control_mutex_);
     if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
     if (layer.input_id != 0 && find_input(layer.input_id) == nullptr) {
@@ -272,6 +298,49 @@ Status Session::set_layer(Bus bus, std::uint32_t index, const LayerConfig& layer
     std::lock_guard scenes(scene_mutex_);
     BusScene& scene = bus == Bus::Program ? program_scene_ : preview_scene_;
     scene.layers[index] = layer.input_id == 0 ? LayerConfig{} : layer;
+    return Status::ok();
+}
+
+Status Session::set_overlay(std::uint32_t channel, const LayerConfig& layer) {
+    if (channel >= kOverlayChannels) return {MIXIT_E_INVALID_ARGUMENT, "overlay channel must be below " + std::to_string(kOverlayChannels)};
+    if (Status st = validate_layer(layer); !st.is_ok()) return st;
+    std::lock_guard lock(control_mutex_);
+    if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
+    if (layer.input_id != 0 && find_input(layer.input_id) == nullptr) {
+        return {MIXIT_E_NOT_FOUND, "no input with id " + std::to_string(layer.input_id)};
+    }
+    std::lock_guard scenes(scene_mutex_);
+    Overlay& o = overlays_[channel];
+    o.layer = layer.input_id == 0 ? LayerConfig{} : layer;
+    if (layer.input_id == 0) {
+        o.visible = false;
+        o.level = 0.0f;
+    }
+    return Status::ok();
+}
+
+Status Session::show_overlay(std::uint32_t channel, bool visible, std::uint32_t fade_frames) {
+    if (channel >= kOverlayChannels) return {MIXIT_E_INVALID_ARGUMENT, "overlay channel must be below " + std::to_string(kOverlayChannels)};
+    if (fade_frames > 600) return {MIXIT_E_INVALID_ARGUMENT, "fade must be at most 600 frames"};
+    std::lock_guard lock(control_mutex_);
+    if (state() == SessionState::Closed) return {MIXIT_E_INVALID_STATE, "session is closed"};
+    std::lock_guard scenes(scene_mutex_);
+    Overlay& o = overlays_[channel];
+    if (visible && o.layer.input_id == 0) return {MIXIT_E_INVALID_STATE, "the overlay channel has no input"};
+    o.visible = visible;
+    o.step = fade_frames == 0 ? 1.0f : 1.0f / static_cast<float>(fade_frames);
+    // While stopped (or with no fade) the change is immediate.
+    if (fade_frames == 0 || state() != SessionState::Running) o.level = visible ? 1.0f : 0.0f;
+    return Status::ok();
+}
+
+Status Session::overlay_info(std::uint32_t channel, OverlayInfo& out) const {
+    if (channel >= kOverlayChannels) return {MIXIT_E_INVALID_ARGUMENT, "overlay channel must be below " + std::to_string(kOverlayChannels)};
+    std::lock_guard scenes(scene_mutex_);
+    const Overlay& o = overlays_[channel];
+    out.layer = o.layer;
+    out.visible = o.visible;
+    out.level = o.level;
     return Status::ok();
 }
 
@@ -419,12 +488,13 @@ SceneDraw Session::build_draw(const BusScene& scene) const noexcept {
         l.crop = cfg.crop;
         l.dest = cfg.dest;
         l.opacity = cfg.opacity;
+        l.key = cfg.key;
     }
     return d;
 }
 
 bool Session::render_bus(const BusScene& a, const BusScene* b, TransitionKind kind, float progress, std::int64_t target,
-                         std::uint64_t tick, ProgramFrame& out) noexcept {
+                         std::uint64_t tick, ProgramFrame& out, const SceneDraw* overlay) noexcept {
     out.info.tick_pts_ns = target;
     out.info.tick_index = tick;
     out.info.width = config_.width;
@@ -441,6 +511,7 @@ bool Session::render_bus(const BusScene& a, const BusScene* b, TransitionKind ki
     bool has_layers = false;
     for (const LayerConfig& l : a.layers) has_layers = has_layers || l.input_id != 0;
 
+    if (overlay != nullptr) has_layers = true;
     // Zero copy: a single full-size base input and nothing else to draw.
     if (b == nullptr && !has_layers && out.info.input_id != 0) {
         const Input* in = find_input(a.base_input);
@@ -450,7 +521,7 @@ bool Session::render_bus(const BusScene& a, const BusScene* b, TransitionKind ki
             return true;
         }
     }
-    if (b == nullptr && da.count == 0) {
+    if (b == nullptr && da.count == 0 && overlay == nullptr) {
         out.frame = black_frame_;
         return true;
     }
@@ -462,7 +533,7 @@ bool Session::render_bus(const BusScene& a, const BusScene* b, TransitionKind ki
     }
     SceneDraw db;
     if (b != nullptr) db = build_draw(*b);
-    Status st = compositor_->render(da, b != nullptr ? &db : nullptr, kind, progress, *out.frame);
+    Status st = compositor_->render(da, b != nullptr ? &db : nullptr, kind, progress, *out.frame, overlay);
     if (!st.is_ok() && compositor_ != cpu_compositor_.get()) {
         // GPU failure (device removed, driver reset): continue on the CPU
         // path for the rest of the session rather than putting black on air.
@@ -470,7 +541,7 @@ bool Session::render_bus(const BusScene& a, const BusScene* b, TransitionKind ki
         compositor_ = cpu_compositor_.get();
         compositor_kind_.store(static_cast<std::int32_t>(CompositorKind::Cpu), std::memory_order_relaxed);
         compositor_fallbacks_.fetch_add(1, std::memory_order_relaxed);
-        st = compositor_->render(da, b != nullptr ? &db : nullptr, kind, progress, *out.frame);
+        st = compositor_->render(da, b != nullptr ? &db : nullptr, kind, progress, *out.frame, overlay);
     }
     if (!st.is_ok()) {
         out.frame = black_frame_;
@@ -513,10 +584,22 @@ void Session::output_loop() noexcept {
         BusScene program_scene;
         BusScene preview_scene;
         Transition tr;
+        std::array<LayerConfig, kOverlayChannels> overlay_layers{};
         {
             std::lock_guard scenes(scene_mutex_);
             program_scene = program_scene_;
             preview_scene = preview_scene_;
+            const std::int64_t ticks_elapsed = previous_n < 0 ? 1 : std::max<std::int64_t>(1, n - previous_n);
+            for (std::uint32_t c = 0; c < kOverlayChannels; ++c) {
+                Overlay& o = overlays_[c];
+                const float target_level = o.visible ? 1.0f : 0.0f;
+                const float delta = o.step * static_cast<float>(ticks_elapsed);
+                o.level = o.level < target_level ? std::min(target_level, o.level + delta) : std::max(target_level, o.level - delta);
+                if (o.level > 0.0f && o.layer.input_id != 0) {
+                    overlay_layers[c] = o.layer;
+                    overlay_layers[c].opacity = o.layer.opacity * o.level;
+                }
+            }
             if (transition_.active) {
                 // Transitions advance with output time: ticks skipped after a
                 // stall count too, so the duration holds under load.
@@ -534,9 +617,21 @@ void Session::output_loop() noexcept {
 
         ProgramFrame out;
         const float progress = tr.active ? static_cast<float>(tr.elapsed) / static_cast<float>(tr.total) : 0.0f;
-        publish_afv(program_scene, tr.active ? &preview_scene : nullptr, progress);
+        SceneDraw overlay_draw;
+        for (const LayerConfig& cfg : overlay_layers) {
+            if (cfg.input_id == 0) continue;
+            const Input* in = find_input(cfg.input_id);
+            if (in == nullptr || !in->current) continue;
+            LayerDraw& l = overlay_draw.layers[overlay_draw.count++];
+            l.frame = &*in->current;
+            l.crop = cfg.crop;
+            l.dest = cfg.dest;
+            l.opacity = cfg.opacity;
+            l.key = cfg.key;
+        }
+        publish_afv(program_scene, tr.active ? &preview_scene : nullptr, progress, overlay_layers);
         render_bus(program_scene, tr.active ? &preview_scene : nullptr, tr.kind, progress, target,
-                   static_cast<std::uint64_t>(n), out);
+                   static_cast<std::uint64_t>(n), out, overlay_draw.count > 0 ? &overlay_draw : nullptr);
         if (out.info.input_id != 0) {
             const std::int64_t latency = target - out.info.source_pts_ns;
             video_latency_last_ns_.store(latency, std::memory_order_relaxed);

@@ -1,11 +1,84 @@
 # MIX IT — Development Status
 
-_Last updated: 2026-11-19 (Milestone 4)_
+_Last updated: 2026-11-21 (Milestone 5)_
 
-**Current milestone:** M4 — Audio engine → **IMPLEMENTED**, tested on Linux and Windows CI (run 44481086098, commit 337520a). Real audio devices and commercial plug-ins not yet exercised (no hardware in CI).
-**Previous milestones:** M3 IMPLEMENTED (reference-hardware checks pending); M1/M2 TESTED.
-**Next milestone:** M5 — Streaming and recording.
+**Current milestone:** M5 — Streaming and recording → **IMPLEMENTED**, tested on Linux and Windows CI (commit cc2cc38). Hardware encoders and real streaming platforms not yet exercised.
+**Previous milestones:** M4 IMPLEMENTED (real audio devices / commercial plug-ins pending); M3 IMPLEMENTED (reference-hardware checks pending); M1/M2 TESTED.
+**Next milestone:** M6 — Graphics and production tools.
 **Owner decision in force (2026-11-19):** no downloadable package/ZIP until M9. CI still builds, smoke-tests and self-tests the Release package on every push; upload only with repository variable `MIXIT_PUBLISH_PACKAGE=true`.
+
+## Completed in M5
+
+| Item | Status | Evidence |
+|---|---|---|
+| Encoder pipeline: H.264 + AAC, shared by outputs with equal settings, timeline timestamps (ADR-0010) | TESTED | recorded MP4 flash/click offset 0.02 ms (Linux x264, LGPL OpenH264); Windows CI with Media Foundation H.264 within the 40 ms limit after the fix below |
+| Automatic encoder choice by open-test (NVENC, Quick Sync, AMF, Media Foundation, OpenH264, x264) | TESTED (software encoders) / EXPERIMENTAL (hardware) | Windows CI picked `h264_mf`; no GPU encoder available in CI |
+| Program recording: fragmented MP4/MOV, MKV, TS, FLV; segments; never overwrite; folder creation; free-space stop | TESTED | decoded back in tests |
+| ISO recording (input size, clean audio) | TESTED | `Outputs.IsoRecordsAnInputAtItsOwnSize` |
+| RTMP streaming | TESTED | local FFmpeg RTMP listener |
+| SRT streaming (caller) | TESTED | local SRT listener |
+| HLS to a folder | TESTED | playlist decoded |
+| RTMPS | EXPERIMENTAL | TLS from FFmpeg; never run against a TLS server |
+| Destination isolation, drop-to-keyframe, reconnect with back-off, stop cancels connecting | TESTED | broken destination test (Linux + Windows) |
+| Stream keys/passwords redacted in logs, errors, UI | TESTED | native + managed tests |
+| C ABI 0.5.0 (60 exports) + managed bindings + `ProductionService` outputs | TESTED | xUnit 44/44 |
+| WPF Streaming & Recording section | TESTED (automated) | self-test records 2.5 s and checks the finalized file |
+
+## Defects found during M5 (fixed)
+
+1. **Windows/Media Foundation: audio 64–85 ms early in recordings.** Audio packets that left the encoder before the first (delayed) video packet were dropped by the destination, so audio started later than the file's timeline. Destinations now hold that audio and keep what belongs after the first keyframe. Reproduced locally with a look-ahead x264: 94.6 ms before, 0.02 ms after.
+2. A stop while a destination was connecting reported FAILED; a stop interrupted the file trailer (broken MKV). Stop now cancels only connection attempts; trailers are never interrupted.
+3. Packet buffers were shared between encoder and destination threads (TSan reports through uninstrumented FFmpeg); each destination now gets its own copy.
+4. Codec parameters leaked once per encoder (ASan).
+
+## Deviations from the M5 plan (honest list)
+
+| Planned | As built | Why / next |
+|---|---|---|
+| Hardware encoders verified | detected and open-tested; only software encoders ran in CI | needs a PC with NVIDIA/Intel/AMD GPU |
+| Real platforms (YouTube, Facebook, …) | local RTMP/SRT servers only | needs stream keys; operator test |
+| HLS over HTTP | folder only | later (needs an upload target) |
+| Audio-only and multi-track recording | not built | M6+ |
+| DeckLink / NDI | not started | optional vendor SDKs (owner) |
+
+## Still unverified (needs a Windows workstation)
+
+| Item | How to check |
+|---|---|
+| Hardware encoder (NVENC / Quick Sync / AMF) chosen and stable for 1 h | Streaming & Recording → Test (encoder list) → record 1 h; watch "frames not encoded" |
+| Streaming to a real platform (RTMPS) incl. reconnect after unplugging the network | add RTMPS destination with key, start, pull the cable for 30 s |
+| M4 items: audio devices, commercial VST3 plug-ins | see M4 section |
+| M3 items: capture devices, GPU compositor, 1080p60 file, 1 h soak | see M3 section |
+
+## Build status
+
+| Target | Result |
+|---|---|
+| Windows: MSVC `/W4 /WX`, .NET 10 incl. WPF | ✅ 0 warnings (CI) |
+| Linux Debug / Release / ASan+UBSan / TSan | ✅ 0 warnings |
+| MinGW-w64 cross-build | ✅ 0 warnings |
+| Windows package (self-contained) | ✅ built + self-tested in CI; **not uploaded** (owner decision until M9) |
+
+## Test results
+
+Native **141/141** (Windows CI; Linux Debug/Release/ASan/TSan) · managed **44/44** (Windows CI xUnit; local runner) · production self-test PASS (incl. a recording). Details: [docs/TEST_REPORT.md](docs/TEST_REPORT.md).
+
+## Known issues
+
+1. **Patent/licence decision before release:** H.264/AAC encoding and the OpenH264 copy inside the LGPL FFmpeg build (THIRD_PARTY_LICENSES ⚖️).
+2. Encoding converts BGRA → YUV on the CPU; at 1080p60 with several distinct encodes this costs CPU (frames are not GPU-resident yet, ADR-0005).
+3. FFmpeg's own messages go to stderr (urls in them are redacted the same way), not into the MIX IT log files.
+4. M4 known issues (in-process VST3, no plug-in crossfade) and M3 known issues still apply.
+
+## Next recommended tasks
+
+1. **M6 — Graphics and production tools** (now): titles/lower thirds/clock/scoreboard with live text, image overlays, chroma and luma key per layer, multiview, instant replay with slow motion, virtual set presets.
+2. **Owner:** H.264/AAC licensing route; ASIO licence; code-signing certificate; licence activation server.
+3. On a Windows workstation: the "Still unverified" checks.
+
+---
+
+# Milestone 4 status (kept for reference)
 
 ## Completed in M4
 

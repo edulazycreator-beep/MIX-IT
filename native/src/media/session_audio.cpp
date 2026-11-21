@@ -78,7 +78,7 @@ void add_into(std::vector<float>& acc, const float* src) noexcept {
     for (std::size_t i = 0; i < acc.size(); ++i) acc[i] += src[i];
 }
 
-bool contains(const std::array<std::uint32_t, kMaxLayersPerScene + 1>& ids, std::uint32_t id) noexcept {
+bool contains(const std::array<std::uint32_t, kMaxLayersPerScene + 1 + Session::kOverlayChannels>& ids, std::uint32_t id) noexcept {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
@@ -254,12 +254,17 @@ Status Session::read_bus_audio(std::uint32_t bus, float* dest, std::uint32_t cap
 
 // --------------------------------------------------------------------------- audio thread
 
-void Session::publish_afv(const BusScene& program, const BusScene* next, float progress) noexcept {
+void Session::publish_afv(const BusScene& program, const BusScene* next, float progress,
+                          const std::array<LayerConfig, kOverlayChannels>& overlays) noexcept {
     AfvState s;
-    auto fill = [](const BusScene& scene, std::array<std::uint32_t, kMaxLayersPerScene + 1>& ids) {
+    // Visible overlay channels stay on air through transitions: in both sets.
+    auto fill = [&overlays](const BusScene& scene, std::array<std::uint32_t, kMaxLayersPerScene + 1 + kOverlayChannels>& ids) {
         std::size_t n = 0;
         if (scene.base_input != 0) ids[n++] = scene.base_input;
         for (const LayerConfig& l : scene.layers) {
+            if (l.input_id != 0 && l.opacity > 0.0f) ids[n++] = l.input_id;
+        }
+        for (const LayerConfig& l : overlays) {
             if (l.input_id != 0 && l.opacity > 0.0f) ids[n++] = l.input_id;
         }
     };

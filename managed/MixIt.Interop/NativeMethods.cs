@@ -21,7 +21,7 @@ internal static unsafe partial class NativeMethods
     // Version of the C header this binding was written against. Must be kept
     // in sync with MIXIT_API_VERSION_* in mixit_engine.h.
     public const uint ExpectedApiMajor = 0;
-    public const uint ExpectedApiMinor = 5;
+    public const uint ExpectedApiMinor = 6;
     public const uint ExpectedApiPatch = 0;
     public const uint ExpectedApiVersion = (ExpectedApiMajor << 24) | (ExpectedApiMinor << 12) | ExpectedApiPatch;
 

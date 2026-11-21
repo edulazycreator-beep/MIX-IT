@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(MixIt
-    VERSION 0.5.0
+    VERSION 0.6.0
     DESCRIPTION "MIX IT - Professional Live Production & Broadcast Studio (native engine)"
     LANGUAGES CXX)
 
@@ -32,6 +32,7 @@ endif()
 include(cmake/MixItCompilerOptions.cmake)
 include(cmake/MixItFfmpeg.cmake)
 include(cmake/MixItVst3.cmake)
+include(cmake/MixItGraphics.cmake)
 
 add_subdirectory(native)
 

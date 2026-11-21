@@ -22,6 +22,7 @@
 #include <atomic>
 #include <string>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -45,6 +46,8 @@ class Logger;
 }
 
 namespace mixit::media {
+
+class GraphicsSource;
 
 // Which compositor a session uses. Auto = CPU in this release: frames are
 // CPU-resident until the GPU decode/display paths land, and the GPU path then
@@ -70,6 +73,7 @@ struct LayerConfig {
     NormRect crop;               // source region
     NormRect dest;               // placement on the bus output
     float opacity = 1.0f;
+    KeySettings key;
 };
 
 // What a bus shows: a base input (fitted with letterbox/pillarbox) and up to
@@ -158,6 +162,10 @@ public:
     Status add_test_source(TestSignalConfig config, std::uint32_t& out_input_id);
     // Adds any source (file, capture). Only while not running.
     Status add_source(std::unique_ptr<MediaSource> source, std::uint32_t& out_input_id);
+    // ---- graphics inputs (M6) ----
+    // Runs `fn` on the graphics source of `input_id` (NOT_FOUND / INVALID_ARGUMENT
+    // when the input is missing or not a graphics input).
+    Status with_graphics(std::uint32_t input_id, const std::function<Status(GraphicsSource&)>& fn) const;
     Status remove_input(std::uint32_t input_id);
     Status set_program_input(std::uint32_t input_id);  // 0 = black; immediate (cancels a running transition)
     Status set_preview_input(std::uint32_t input_id);  // 0 = black
@@ -167,6 +175,20 @@ public:
     // transition is already running; Cut or 0 frames is an immediate cut.
     Status start_transition(TransitionKind kind, std::uint32_t frames);
     Status set_layer(Bus bus, std::uint32_t index, const LayerConfig& layer);
+
+    // ---- overlay channels (M6): downstream keys on top of the program ----
+    // Each channel holds a layer (titles, logos, keyed cameras) drawn over
+    // the program after transitions, so it stays on air across cuts. It is
+    // shown/hidden with a fade over N output frames (0 = cut).
+    static constexpr std::uint32_t kOverlayChannels = 4;
+    struct OverlayInfo {
+        LayerConfig layer;
+        bool visible = false;  // target state (after the fade)
+        float level = 0.0f;    // current 0..1
+    };
+    Status set_overlay(std::uint32_t channel, const LayerConfig& layer);
+    Status show_overlay(std::uint32_t channel, bool visible, std::uint32_t fade_frames);
+    Status overlay_info(std::uint32_t channel, OverlayInfo& out) const;
     Status start();
     Status stop();
     void close() noexcept;  // stop + refuse further use (engine shutdown)
@@ -272,7 +294,8 @@ private:
     void init_audio();
     void reset_audio_runtime() noexcept;
     void mix_block(std::int64_t block_index) noexcept;
-    void publish_afv(const BusScene& program, const BusScene* next, float progress) noexcept;
+    void publish_afv(const BusScene& program, const BusScene* next, float progress,
+                     const std::array<LayerConfig, kOverlayChannels>& overlays) noexcept;
     void match_av_events(Input& input) noexcept;
     void stop_threads() noexcept;
     struct Transition {
@@ -283,7 +306,8 @@ private:
     };
     SceneDraw build_draw(const BusScene& scene) const noexcept;
     bool render_bus(const BusScene& a, const BusScene* b, TransitionKind kind, float progress, std::int64_t target,
-                    std::uint64_t tick, ProgramFrame& out) noexcept;
+                    std::uint64_t tick, ProgramFrame& out, const SceneDraw* overlay = nullptr) noexcept;
+    Status validate_layer(const LayerConfig& layer) const;  // ranges only
     Input* find_input(std::uint32_t id) const noexcept;
     Status add_input_locked(std::unique_ptr<MediaSource> source, std::uint32_t& out_input_id);
 
@@ -315,6 +339,13 @@ private:
     BusScene program_scene_;
     BusScene preview_scene_;
     Transition transition_;
+    struct Overlay {
+        LayerConfig layer;
+        bool visible = false;
+        float level = 0.0f;     // current
+        float step = 1.0f;      // level change per tick while fading
+    };
+    std::array<Overlay, kOverlayChannels> overlays_{};  // guarded by scene_mutex_
     std::atomic<std::int64_t> preview_requested_ns_{-1'000'000'000'000LL};
 
     std::mutex consumer_mutex_;
@@ -336,8 +367,8 @@ private:
     // Which inputs are on air for audio-follows-video, published by the output
     // thread every tick and read by the audio thread.
     struct AfvState {
-        std::array<std::uint32_t, kMaxLayersPerScene + 1> on_program{};
-        std::array<std::uint32_t, kMaxLayersPerScene + 1> incoming{};  // next scene during a transition
+        std::array<std::uint32_t, kMaxLayersPerScene + 1 + kOverlayChannels> on_program{};
+        std::array<std::uint32_t, kMaxLayersPerScene + 1 + kOverlayChannels> incoming{};  // next scene during a transition
         float progress = 0.0f;                                          // 0 = program only
         bool transitioning = false;
     };

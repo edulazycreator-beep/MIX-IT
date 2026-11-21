@@ -140,6 +140,39 @@ public sealed record LayerSettings
     public NormalizedRect Destination { get; init; } = NormalizedRect.Full;
     /// <summary>0..1, multiplied with the source alpha.</summary>
     public float Opacity { get; init; } = 1.0f;
+    /// <summary>Chroma or luma key (M6); none by default.</summary>
+    public KeySettings Key { get; init; } = KeySettings.None;
+}
+
+public enum KeyType
+{
+    None = 0,
+    Chroma = 1,
+    Luma = 2,
+}
+
+/// <summary>
+/// Keyer of a layer. Chroma: pixels whose colour (BT.709 CbCr) is within
+/// <see cref="Similarity"/> of <see cref="Color"/> become transparent, with a
+/// <see cref="Smoothness"/> soft edge and <see cref="Spill"/> suppression of
+/// green/blue fringes. Luma: pixels darker than <see cref="Threshold"/> become
+/// transparent (or brighter ones, inverted).
+/// </summary>
+public sealed record KeySettings
+{
+    public static KeySettings None { get; } = new();
+    public static KeySettings GreenScreen { get; } = new() { Type = KeyType.Chroma, Color = 0x00B140 };
+    public static KeySettings BlueScreen { get; } = new() { Type = KeyType.Chroma, Color = 0x0047BB };
+
+    public KeyType Type { get; init; }
+    /// <summary>Key colour 0xRRGGBB.</summary>
+    public uint Color { get; init; } = 0x00B140;
+    public float Similarity { get; init; } = 0.12f;
+    public float Smoothness { get; init; } = 0.08f;
+    public float Spill { get; init; } = 0.5f;
+    public float Threshold { get; init; } = 0.1f;
+    public float Softness { get; init; } = 0.05f;
+    public bool Invert { get; init; }
 }
 
 /// <summary>Per-input counters, including A/V alignment of the test signal.</summary>
@@ -302,6 +335,14 @@ public sealed unsafe class NativeSession : IDisposable
             DestW = layer.Destination.Width,
             DestH = layer.Destination.Height,
             Opacity = layer.Opacity,
+            KeyType = (int)layer.Key.Type,
+            KeyColor = layer.Key.Color,
+            KeySimilarity = layer.Key.Similarity,
+            KeySmoothness = layer.Key.Smoothness,
+            KeySpill = layer.Key.Spill,
+            LumaThreshold = layer.Key.Threshold,
+            LumaSoftness = layer.Key.Softness,
+            KeyFlags = layer.Key.Invert ? 1u : 0u,
         };
         Check(NativeMethods.mixit_session_set_layer(_handle, (int)bus, index, &c), "mixit_session_set_layer");
     }

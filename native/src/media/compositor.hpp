@@ -32,11 +32,42 @@ struct NormRect {
 
 inline constexpr std::uint32_t kMaxLayersPerScene = 8;  // overlay layers on top of the base
 
+// Keyer applied to a layer's sampled pixels (M6). Computed in float, after
+// bilinear sampling, identically in the CPU and GPU compositors:
+//   Y  = BT.709 luma of the (straight) colour, Cb/Cr = BT.709 chroma;
+//   chroma: a = clamp((|CbCr - key CbCr| - similarity) / smoothness, 0, 1),
+//           spill: the key's dominant channel (G or B) is pulled towards
+//           max(other two) by `spill` (removes green/blue fringes);
+//   luma:   a = clamp((Y - threshold) / softness, 0, 1), optionally inverted;
+//   output alpha = source alpha × opacity × a.
+enum class KeyType : std::int32_t { None = 0, Chroma = 1, Luma = 2 };  // = MIXIT_KEY_*
+
+struct KeySettings {
+    KeyType type = KeyType::None;
+    std::uint32_t color = 0x00B140;  // chroma key colour 0xRRGGBB (default: chroma green)
+    float similarity = 0.12f;        // CbCr distance fully keyed out (0..1)
+    float smoothness = 0.08f;        // soft edge width (> 0)
+    float spill = 0.5f;              // 0..1
+    float threshold = 0.1f;          // luma key: luma below this is transparent
+    float softness = 0.05f;          // luma soft edge (> 0)
+    bool invert = false;             // luma key: keep the dark parts instead
+    friend bool operator==(const KeySettings&, const KeySettings&) = default;
+};
+
+// Key colour in BT.709 CbCr (each -0.5..0.5) and its dominant channel
+// (0 = blue, 1 = green, 2 = red as in BGRA order).
+struct KeyColour {
+    float cb = 0, cr = 0;
+    int dominant = 1;
+};
+KeyColour key_colour(std::uint32_t rgb) noexcept;
+
 struct LayerDraw {
     const VideoFrame* frame = nullptr;  // null = skip
     NormRect crop;                      // source region
     NormRect dest;                      // destination region of the output
     float opacity = 1.0f;               // multiplied with the source alpha
+    KeySettings key;                    // keyer (none by default)
 };
 
 // Draw list for one scene, bottom to top. Layer 0 is normally the base input.
@@ -62,8 +93,13 @@ public:
 
     // Renders `a` into `dst` (cleared to black first). If `b` is non-null,
     // renders it too and blends A→B with `kind` at `progress` in [0, 1].
-    virtual Status render(const SceneDraw& a, const SceneDraw* b, TransitionKind kind, float progress,
-                          VideoFrame& dst) noexcept = 0;
+    // `overlay` layers (overlay channels / downstream keys, M6) are drawn on
+    // top of the result, after the transition.
+    virtual Status render(const SceneDraw& a, const SceneDraw* b, TransitionKind kind, float progress, VideoFrame& dst,
+                          const SceneDraw* overlay) noexcept = 0;
+    Status render(const SceneDraw& a, const SceneDraw* b, TransitionKind kind, float progress, VideoFrame& dst) noexcept {
+        return render(a, b, kind, progress, dst, nullptr);
+    }
 };
 
 std::unique_ptr<Compositor> make_cpu_compositor();

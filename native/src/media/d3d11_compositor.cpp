@@ -48,6 +48,9 @@ cbuffer Params : register(b0) {
     float4 uv;        // texture coordinates at the quad corners (u0, v0, u1, v1)
     float4 uv_clamp;  // min_u, min_v, max_u, max_v (texel centres, normalized)
     float4 params;    // opacity, transition kind, progress, wipe edge in pixels
+    float4 key0;      // key type (0 none, 1 chroma, 2 luma), key Cb, key Cr, dominant channel (0 b, 1 g, 2 r)
+    float4 key1;      // similarity, 1/smoothness, spill, luma threshold
+    float4 key2;      // 1/softness, invert, -, -
 };
 Texture2D tex0 : register(t0);
 Texture2D tex1 : register(t1);
@@ -66,9 +69,34 @@ VsOut vs_main(uint id : SV_VertexID) {
     return o;
 }
 
+// Same keyer as the CPU compositor (compositor.hpp, KeySettings).
+float key_alpha(inout float3 rgb) {
+    float y = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    if (key0.x > 1.5) {
+        float a = saturate((y - key1.w) * key2.x);
+        return key2.y > 0.5 ? 1.0 - a : a;
+    }
+    float2 cbcr = float2((rgb.b - y) / 1.8556, (rgb.r - y) / 1.5748);
+    float a = saturate((length(cbcr - key0.yz) - key1.x) * key1.y);
+    if (key1.z > 0.0) {
+        // Channels in BGRA order as on the CPU: 0 = b, 1 = g, 2 = r.
+        float3 bgr = rgb.bgr * 255.0;
+        int c = (int)key0.w;
+        float cap = c == 0 ? max(bgr.y, bgr.z) : (c == 1 ? max(bgr.x, bgr.z) : max(bgr.x, bgr.y));
+        float v = c == 0 ? bgr.x : (c == 1 ? bgr.y : bgr.z);
+        if (v > cap) v = round(v - key1.z * (v - cap));
+        if (c == 0) bgr.x = v; else if (c == 1) bgr.y = v; else bgr.z = v;
+        rgb = bgr.zyx / 255.0;
+    }
+    return a;
+}
+
 float4 ps_layer(VsOut i) : SV_Target {
     float4 s = tex0.SampleLevel(linear_clamp, clamp(i.uv, uv_clamp.xy, uv_clamp.zw), 0);
-    return float4(s.rgb, s.a * params.x);
+    float a = s.a * params.x;
+    float3 c = s.rgb;
+    if (key0.x > 0.5 && a > 0.0) a *= key_alpha(c);
+    return float4(c, a);
 }
 
 float4 ps_blend(VsOut i) : SV_Target {
@@ -94,8 +122,11 @@ struct alignas(16) Constants {
     float uv[4];
     float uv_clamp[4];
     float params[4];
+    float key0[4];
+    float key1[4];
+    float key2[4];
 };
-static_assert(sizeof(Constants) == 64);
+static_assert(sizeof(Constants) == 112);
 
 std::string hr_text(HRESULT hr) { return std::format("0x{:08X}", static_cast<unsigned>(hr)); }
 
@@ -147,22 +178,26 @@ public:
         return Status::ok();
     }
 
-    Status render(const SceneDraw& a, const SceneDraw* b, TransitionKind kind, float progress,
-                  VideoFrame& dst) noexcept override {
+    using Compositor::render;
+    Status render(const SceneDraw& a, const SceneDraw* b, TransitionKind kind, float progress, VideoFrame& dst,
+                  const SceneDraw* overlay) noexcept override {
         try {
             ++generation_;
             Status st = ensure_target(target_a_, dst.width, dst.height);
             if (!st.is_ok()) return st;
             if (st = draw_scene(a, target_a_); !st.is_ok()) return st;
-            ID3D11Texture2D* result = target_a_.texture.get();
+            Target* result = &target_a_;
             if (b != nullptr && kind != TransitionKind::Cut) {
                 if (st = ensure_target(target_b_, dst.width, dst.height); !st.is_ok()) return st;
                 if (st = ensure_target(target_out_, dst.width, dst.height); !st.is_ok()) return st;
                 if (st = draw_scene(*b, target_b_); !st.is_ok()) return st;
                 if (st = blend(kind, std::clamp(progress, 0.0f, 1.0f)); !st.is_ok()) return st;
-                result = target_out_.texture.get();
+                result = &target_out_;
             }
-            return readback(result, dst);
+            if (overlay != nullptr && overlay->count > 0) {
+                if (st = draw_layers(*overlay, *result); !st.is_ok()) return st;
+            }
+            return readback(result->texture.get(), dst);
         } catch (const std::exception& e) {
             return {MIXIT_E_INTERNAL, std::string("D3D11 compositor: ") + e.what()};
         }
@@ -382,6 +417,11 @@ private:
     Status draw_scene(const SceneDraw& scene, Target& t) {
         const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         context_->ClearRenderTargetView(t.rtv.get(), black);
+        return draw_layers(scene, t);
+    }
+
+    // Draws layers "over" what the target already holds.
+    Status draw_layers(const SceneDraw& scene, Target& t) {
         bind_common(t);
         context_->PSSetShader(ps_layer_.get(), nullptr, 0);
         const float factor[4] = {0, 0, 0, 0};
@@ -420,6 +460,19 @@ private:
         c.uv_clamp[2] = (std::max(min_u, max_u) + 0.5f) / sw;
         c.uv_clamp[3] = (std::max(min_v, max_v) + 0.5f) / sh;
         c.params[0] = opacity;
+        if (l.key.type != KeyType::None) {
+            const KeyColour kc = key_colour(l.key.color);
+            c.key0[0] = static_cast<float>(static_cast<int>(l.key.type));
+            c.key0[1] = kc.cb;
+            c.key0[2] = kc.cr;
+            c.key0[3] = static_cast<float>(kc.dominant);
+            c.key1[0] = l.key.similarity;
+            c.key1[1] = 1.0f / std::max(l.key.smoothness, 1e-4f);
+            c.key1[2] = l.key.spill;
+            c.key1[3] = l.key.threshold;
+            c.key2[0] = 1.0f / std::max(l.key.softness, 1e-4f);
+            c.key2[1] = l.key.invert ? 1.0f : 0.0f;
+        }
 
         ID3D11ShaderResourceView* srv = nullptr;
         if (Status st = upload(src, srv); !st.is_ok()) return st;

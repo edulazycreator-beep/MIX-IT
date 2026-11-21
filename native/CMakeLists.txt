@@ -13,6 +13,7 @@ set(MIXIT_CORE_SOURCES
     src/abi/audio_abi.cpp
     src/abi/vst3_abi.cpp
     src/abi/output_abi.cpp
+    src/abi/graphics_abi.cpp
     src/core/engine.cpp
     src/core/last_error.cpp
     src/logging/json.cpp
@@ -32,8 +33,12 @@ set(MIXIT_CORE_SOURCES
     src/audio/vst3_host.cpp
     src/output/output.cpp
     src/output/output_url.cpp
+    src/graphics/json.cpp
+    src/graphics/graphics.cpp
+    src/graphics/image_loader.cpp
     src/media/test_signal.cpp
     src/media/test_signal_source.cpp
+    src/media/graphics_source.cpp
     src/media/time_base.cpp
     src/platform/cpuid.cpp
 )
@@ -67,6 +72,11 @@ if(MIXIT_VST3_FOUND)
     target_link_libraries(mixit_engine_core PUBLIC mixit_vst3_interfaces)
 endif()
 target_compile_definitions(mixit_engine_core PUBLIC MIXIT_HAVE_VST3=$<BOOL:${MIXIT_VST3_FOUND}>)
+if(MIXIT_GRAPHICS_FOUND)
+    target_sources(mixit_engine_core PRIVATE ${MIXIT_FONT_SOURCES})
+    target_link_libraries(mixit_engine_core PRIVATE freetype)
+endif()
+target_compile_definitions(mixit_engine_core PUBLIC MIXIT_HAVE_GRAPHICS=$<BOOL:${MIXIT_GRAPHICS_FOUND}>)
 if(WIN32)
     target_link_libraries(mixit_engine_core PUBLIC dxgi d3d11 mfuuid ole32)
 endif()

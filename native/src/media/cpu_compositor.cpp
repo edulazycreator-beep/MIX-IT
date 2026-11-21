@@ -128,7 +128,7 @@ void clear_black_rows(VideoFrame& f, int y0, int y1) noexcept {
 bool is_plain_copy(const LayerDraw& l, const VideoFrame& dst) noexcept {
     const VideoFrame& s = *l.frame;
     return s.width == dst.width && s.height == dst.height && l.crop == NormRect{} && l.dest == NormRect{} &&
-           l.opacity >= 1.0f;
+           l.opacity >= 1.0f && l.key.type == KeyType::None;
 }
 
 // Per-lane scratch: horizontal taps are shared (computed once per layer),
@@ -138,8 +138,40 @@ struct LaneScratch {
     std::vector<std::uint16_t> rows[2];
 };
 
+// Keyer parameters prepared once per layer (see KeySettings).
+struct KeyPlan {
+    KeyType type = KeyType::None;
+    float cb = 0, cr = 0, similarity = 0, inv_smooth = 1, spill = 0, threshold = 0, inv_soft = 1;
+    int dominant = 1;  // BGRA channel index
+    bool invert = false;
+};
+
+// Returns the key alpha (0..1) for a straight BGRA pixel (0..255 each) and
+// applies spill suppression to its colour in place.
+inline float apply_key(const KeyPlan& k, int* bgr) noexcept {
+    const float b = static_cast<float>(bgr[0]) / 255.0f, g = static_cast<float>(bgr[1]) / 255.0f,
+                r = static_cast<float>(bgr[2]) / 255.0f;
+    const float y = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    if (k.type == KeyType::Luma) {
+        float a = std::clamp((y - k.threshold) * k.inv_soft, 0.0f, 1.0f);
+        return k.invert ? 1.0f - a : a;
+    }
+    const float cb = (b - y) / 1.8556f, cr = (r - y) / 1.5748f;
+    const float dcb = cb - k.cb, dcr = cr - k.cr;
+    const float d = std::sqrt(dcb * dcb + dcr * dcr);
+    const float a = std::clamp((d - k.similarity) * k.inv_smooth, 0.0f, 1.0f);
+    if (k.spill > 0.0f) {
+        const int c = k.dominant;
+        const int o1 = c == 0 ? 1 : 0, o2 = c == 2 ? 1 : 2;
+        const int cap = std::max(bgr[o1], bgr[o2]);
+        if (bgr[c] > cap) bgr[c] = static_cast<int>(std::lround(static_cast<float>(bgr[c]) - k.spill * static_cast<float>(bgr[c] - cap)));
+    }
+    return a;
+}
+
 struct LayerPlan {
     const VideoFrame* src = nullptr;
+    KeyPlan key;
     PixelRect d{};
     float cy0 = 0, sy = 0, min_v = 0, max_v = 0;
     int op = 256;
@@ -190,7 +222,10 @@ void draw_band(const LayerPlan& p, VideoFrame& dst, LaneScratch& s, int y0, int 
         for (int i = 0; i < p.dw; ++i, o += 4, a += 4, b += 4) {
             int px[4];
             for (int c = 0; c < 4; ++c) px[c] = (a[c] * (256 - fy) + b[c] * fy + (1 << 15)) >> 16;
-            const int alpha = (px[3] * p.op + 127) / 255;  // 0..256
+            int alpha = (px[3] * p.op + 127) / 255;  // 0..256
+            if (p.key.type != KeyType::None && alpha > 0) {
+                alpha = static_cast<int>(std::lround(static_cast<float>(alpha) * apply_key(p.key, px)));
+            }
             if (alpha >= 256) {
                 o[0] = static_cast<std::uint8_t>(px[0]);
                 o[1] = static_cast<std::uint8_t>(px[1]);
@@ -210,13 +245,23 @@ public:
     [[nodiscard]] std::string name() const override { return "cpu"; }
     [[nodiscard]] CompositorKind kind() const noexcept override { return CompositorKind::Cpu; }
 
-    Status render(const SceneDraw& a, const SceneDraw* b, TransitionKind kind, float progress,
-                  VideoFrame& dst) noexcept override {
+    using Compositor::render;
+    Status render(const SceneDraw& a, const SceneDraw* b, TransitionKind kind, float progress, VideoFrame& dst,
+                  const SceneDraw* overlay) noexcept override {
         if (!render_scene(a, dst)) return {MIXIT_E_OUT_OF_MEMORY, "compositor scratch rows"};
-        if (b == nullptr || kind == TransitionKind::Cut) return Status::ok();
-        if (!ensure_scratch(dst)) return {MIXIT_E_OUT_OF_MEMORY, "compositor scratch frame"};
-        if (!render_scene(*b, scratch_)) return {MIXIT_E_OUT_OF_MEMORY, "compositor scratch rows"};
-        blend(dst, scratch_, kind, std::clamp(progress, 0.0f, 1.0f));
+        if (b != nullptr && kind != TransitionKind::Cut) {
+            if (!ensure_scratch(dst)) return {MIXIT_E_OUT_OF_MEMORY, "compositor scratch frame"};
+            if (!render_scene(*b, scratch_)) return {MIXIT_E_OUT_OF_MEMORY, "compositor scratch rows"};
+            blend(dst, scratch_, kind, std::clamp(progress, 0.0f, 1.0f));
+        }
+        if (overlay != nullptr) {
+            const std::uint32_t n = std::min<std::uint32_t>(overlay->count, static_cast<std::uint32_t>(overlay->layers.size()));
+            for (std::uint32_t i = 0; i < n; ++i) {
+                if (overlay->layers[i].frame != nullptr && !draw_layer(overlay->layers[i], dst)) {
+                    return {MIXIT_E_OUT_OF_MEMORY, "compositor scratch rows"};
+                }
+            }
+        }
         return Status::ok();
     }
 
@@ -271,6 +316,19 @@ private:
         const float sx = cw / static_cast<float>(p.dw);
         p.sy = ch / static_cast<float>(p.d.y1 - p.d.y0);
         p.op = static_cast<int>(std::lround(opacity * 256.0f));
+        if (l.key.type != KeyType::None) {
+            const KeyColour kc = key_colour(l.key.color);
+            p.key.type = l.key.type;
+            p.key.cb = kc.cb;
+            p.key.cr = kc.cr;
+            p.key.dominant = kc.dominant;
+            p.key.similarity = l.key.similarity;
+            p.key.inv_smooth = 1.0f / std::max(l.key.smoothness, 1e-4f);
+            p.key.spill = l.key.spill;
+            p.key.threshold = l.key.threshold;
+            p.key.inv_soft = 1.0f / std::max(l.key.softness, 1e-4f);
+            p.key.invert = l.key.invert;
+        }
 
         const auto dw = static_cast<std::size_t>(p.dw);
         try {
@@ -372,6 +430,18 @@ NormRect fit_rect(std::uint32_t src_w, std::uint32_t src_h, std::uint32_t dst_w,
     }
     const auto w = static_cast<float>(src_aspect / dst_aspect);  // narrower: pillarbox
     return {(1.0f - w) / 2.0f, 0.0f, w, 1.0f};
+}
+
+KeyColour key_colour(std::uint32_t rgb) noexcept {
+    const float r = static_cast<float>((rgb >> 16) & 0xFF) / 255.0f;
+    const float g = static_cast<float>((rgb >> 8) & 0xFF) / 255.0f;
+    const float b = static_cast<float>(rgb & 0xFF) / 255.0f;
+    const float y = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    KeyColour k;
+    k.cb = (b - y) / 1.8556f;
+    k.cr = (r - y) / 1.5748f;
+    k.dominant = g >= b && g >= r ? 1 : (b >= r ? 0 : 2);
+    return k;
 }
 
 }  // namespace mixit::media

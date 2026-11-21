@@ -221,6 +221,66 @@ void gradient(VideoFrame& f, int salt) {
 
 }  // namespace
 
+TEST(Compositor, ChromaKeyRemovesGreenKeepsTheTalentAndSuppressesSpill) {
+    Frames f;
+    auto cpu = make_cpu_compositor();
+    VideoRef cam = f.pool.acquire();
+    // Left half: chroma green screen (0x00B140); right half: a skin tone; one
+    // column of greenish fringe (spill) next to it.
+    for (std::uint32_t y = 0; y < cam->height; ++y) {
+        for (std::uint32_t x = 0; x < cam->width; ++x) {
+            std::uint8_t* p = cam->data + static_cast<std::size_t>(y) * cam->stride + x * 4;
+            const bool green = x < 32, fringe = x == 32;
+            p[0] = green ? 0x40 : fringe ? 0x70 : 0x80;  // b
+            p[1] = green ? 0xB1 : fringe ? 0xC0 : 0x9C;  // g
+            p[2] = green ? 0x00 : fringe ? 0xA0 : 0xD2;  // r
+            p[3] = 255;
+        }
+    }
+    LayerDraw bg;
+    bg.frame = &*f.red;
+    LayerDraw talent;
+    talent.frame = &*cam;
+    talent.key.type = KeyType::Chroma;
+    talent.key.color = 0x00B140;
+    talent.key.spill = 1.0f;
+    ASSERT_TRUE(cpu->render(scene({bg, talent}), nullptr, TransitionKind::Cut, 0, *f.dst).is_ok());
+    const Px keyed = at(*f.dst, 10, 10);
+    EXPECT_EQ(keyed.r, 255) << "green screen replaced by the background";
+    EXPECT_EQ(keyed.g, 0);
+    const Px skin = at(*f.dst, 50, 10);
+    EXPECT_EQ(skin.r, 0xD2) << "the talent is untouched";
+    EXPECT_EQ(skin.g, 0x9C);
+    EXPECT_EQ(skin.b, 0x80);
+    const Px fringe = at(*f.dst, 32, 10);
+    EXPECT_LE(fringe.g, 0xA0) << "spill: green pulled down to max(red, blue)";
+}
+
+TEST(Compositor, LumaKeyCutsDarkPartsAndCanInvert) {
+    Frames f;
+    auto cpu = make_cpu_compositor();
+    VideoRef logo = f.pool.acquire();
+    fill(*logo, 0, 0, 0);  // black background
+    for (std::uint32_t y = 10; y < 20; ++y)
+        for (std::uint32_t x = 10; x < 30; ++x) std::memset(logo->data + y * logo->stride + x * 4, 255, 3);  // white text block
+    LayerDraw bg;
+    bg.frame = &*f.red;
+    LayerDraw l;
+    l.frame = &*logo;
+    l.key.type = KeyType::Luma;
+    l.key.threshold = 0.2f;
+    l.key.softness = 0.1f;
+    ASSERT_TRUE(cpu->render(scene({bg, l}), nullptr, TransitionKind::Cut, 0, *f.dst).is_ok());
+    EXPECT_EQ(at(*f.dst, 2, 2).r, 255) << "black keyed out";
+    EXPECT_EQ(at(*f.dst, 2, 2).g, 0);
+    EXPECT_EQ(at(*f.dst, 15, 15).g, 255) << "white kept";
+    l.key.invert = true;
+    ASSERT_TRUE(cpu->render(scene({bg, l}), nullptr, TransitionKind::Cut, 0, *f.dst).is_ok());
+    EXPECT_EQ(at(*f.dst, 2, 2).r, 0) << "inverted: black kept";
+    EXPECT_EQ(at(*f.dst, 15, 15).r, 255) << "inverted: white keyed out";
+    EXPECT_EQ(at(*f.dst, 15, 15).g, 0);
+}
+
 TEST(Compositor, D3D11MatchesTheCpuReference) {
     LoggerOptions lo;
     lo.min_level = MIXIT_LOG_OFF;
@@ -276,6 +336,23 @@ TEST(Compositor, D3D11MatchesTheCpuReference) {
         pip.dest = {0.4f, 0.3f, 0.5f, 0.6f};
         pip.opacity = 0.7f;
         c.a = scene({base, pip});
+        cases.push_back(c);
+    }
+    for (KeyType kt : {KeyType::Chroma, KeyType::Luma}) {
+        Case c;
+        c.name = kt == KeyType::Chroma ? "chroma key" : "luma key";
+        LayerDraw base;
+        base.frame = &*f.red;
+        LayerDraw keyed;
+        keyed.frame = &*s1;  // a gradient covers a range of colours and lumas
+        keyed.dest = {0.1f, 0.1f, 0.8f, 0.8f};
+        keyed.key.type = kt;
+        keyed.key.color = 0x20A040;
+        keyed.key.similarity = 0.05f;
+        keyed.key.smoothness = 0.2f;
+        keyed.key.threshold = 0.3f;
+        keyed.key.softness = 0.3f;
+        c.a = scene({base, keyed});
         cases.push_back(c);
     }
     for (TransitionKind k : {TransitionKind::Mix, TransitionKind::Fade, TransitionKind::Wipe}) {

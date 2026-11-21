@@ -28,6 +28,7 @@ add_executable(mixit_native_tests
     media_file_writer.cpp
     media_file_reader.cpp
     test_outputs.cpp
+    test_graphics.cpp
     test_compositor.cpp
     test_buses.cpp
     test_audio_dsp.cpp

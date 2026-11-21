@@ -67,7 +67,7 @@ extern "C" {
 #define MIXIT_VERSION_PATCH(v) ((v) & 0xFFFu)
 
 #define MIXIT_API_VERSION_MAJOR 0
-#define MIXIT_API_VERSION_MINOR 5
+#define MIXIT_API_VERSION_MINOR 6
 #define MIXIT_API_VERSION_PATCH 0
 #define MIXIT_API_VERSION \
     MIXIT_MAKE_VERSION(MIXIT_API_VERSION_MAJOR, MIXIT_API_VERSION_MINOR, MIXIT_API_VERSION_PATCH)
@@ -513,7 +513,44 @@ typedef struct mixit_layer_config {
     float    dest_x, dest_y, dest_w, dest_h;   /* placement on the bus */
     float    opacity;             /* 0..1, multiplied with the source alpha */
     uint32_t reserved;            /* must be 0 */
+    /* API 0.6 (M6): keyer. Callers with the 0.3 size (48 bytes) get no key. */
+    int32_t  key_type;            /* MIXIT_KEY_NONE / CHROMA / LUMA */
+    uint32_t key_color;           /* chroma: 0xRRGGBB (e.g. 0x00B140 green, 0x0047BB blue) */
+    float    key_similarity;      /* chroma: CbCr distance keyed out completely, 0..1 (try 0.12) */
+    float    key_smoothness;      /* chroma: soft edge, > 0..1 (try 0.08) */
+    float    key_spill;           /* chroma: spill suppression 0..1 (try 0.5) */
+    float    luma_threshold;      /* luma: luma below this is transparent, 0..1 */
+    float    luma_softness;       /* luma: soft edge, > 0..1 */
+    uint32_t key_flags;           /* MIXIT_KEY_FLAG_INVERT (luma) */
 } mixit_layer_config;
+
+/* Overlay channels (API 0.6, M6): downstream layers drawn on top of the
+ * program after transitions (titles, logos, keyed cameras), so they stay on
+ * air across cuts. Content any time; shown/hidden with a fade. A visible
+ * overlay counts as "on program" for audio-follows-video. */
+#define MIXIT_OVERLAY_CHANNELS 4
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_overlay(mixit_session session, uint32_t channel,
+                                                             const mixit_layer_config* layer);
+/* visible != 0 shows the channel; fade over `fade_frames` output frames
+ * (0 = cut, <= 600). INVALID_STATE when showing a channel without input. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_show_overlay(mixit_session session, uint32_t channel, int32_t visible,
+                                                              uint32_t fade_frames);
+
+typedef struct mixit_overlay_info {
+    uint32_t struct_size;
+    uint32_t input_id;   /* 0 = empty */
+    int32_t  visible;    /* target state */
+    float    level;      /* current 0..1 (fading) */
+} mixit_overlay_info;
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_overlay(mixit_session session, uint32_t channel,
+                                                             mixit_overlay_info* out_info);
+
+#define MIXIT_KEY_NONE   0
+#define MIXIT_KEY_CHROMA 1
+#define MIXIT_KEY_LUMA   2
+#define MIXIT_KEY_FLAG_INVERT 0x1u
 
 /* Selects the preview input (0 = black). Any time. */
 MIXIT_API mixit_result MIXIT_CALL mixit_session_set_preview_input(mixit_session session, uint32_t input_id);
@@ -978,6 +1015,54 @@ typedef struct mixit_video_encoder_info {
  * (slow: hardware probing; not on a UI thread). NOT_SUPPORTED without FFmpeg. */
 MIXIT_API mixit_result MIXIT_CALL mixit_query_video_encoders(mixit_video_encoder_info* encoders, uint32_t capacity,
                                                               uint32_t* out_count);
+
+/* ---- Graphics inputs: titles, lower thirds, clock, scoreboard (API 0.6, M6) ----
+ * A graphics input renders a JSON scene of rect/text/image elements into a
+ * transparent BGRA frame (put it on an overlay channel or a layer). Text uses
+ * FreeType with the embedded DejaVu Sans (or a font file); "{name}"
+ * placeholders show field values; "{time}" = local time, "{timer}" = the
+ * input's stopwatch/countdown. Scene format: docs/API_CONTRACT.md. */
+
+typedef struct mixit_graphics_source_config {
+    uint32_t    struct_size;
+    uint32_t    width;        /* even, 16..8192 (usually the session size) */
+    uint32_t    height;
+    uint32_t    reserved;     /* 0 */
+    const char* scene_json;   /* UTF-8, <= 1 MiB */
+} mixit_graphics_source_config;
+
+/* Only while not RUNNING (like other inputs). INVALID_ARGUMENT with the JSON
+ * error (offset) for an invalid scene; NOT_SUPPORTED without the renderer. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_add_graphics_source(mixit_session session,
+                                                                     const mixit_graphics_source_config* config,
+                                                                     uint32_t* out_input_id);
+/* Any time. The old scene stays when the new one is invalid. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_graphics_scene(mixit_session session, uint32_t input_id,
+                                                                    const char* scene_json);
+/* Any time; shown within ~10 ms. name: 1..64 bytes; value: <= 4096 bytes UTF-8. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_graphics_field(mixit_session session, uint32_t input_id,
+                                                                    const char* name, const char* value);
+
+#define MIXIT_GRAPHICS_TIMER_STOPWATCH 1
+#define MIXIT_GRAPHICS_TIMER_COUNTDOWN 2
+
+/* Sets the timer: value_ms >= 0 sets it, < 0 keeps the current value (pause
+ * / resume); running starts or pauses it. A countdown stops at 0. */
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_graphics_timer(mixit_session session, uint32_t input_id,
+                                                                    int32_t mode, int64_t value_ms, int32_t running);
+
+typedef struct mixit_graphics_info {
+    uint32_t struct_size;
+    int32_t  timer_mode;       /* MIXIT_GRAPHICS_TIMER_* */
+    int64_t  timer_ms;
+    int32_t  timer_running;
+    uint32_t reserved;
+    uint64_t frames_rendered;
+    char     warnings[256];    /* last render: missing font/image, empty when fine */
+} mixit_graphics_info;
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_graphics_info(mixit_session session, uint32_t input_id,
+                                                                   mixit_graphics_info* out_info);
 
 #ifdef __cplusplus
 } /* extern "C" */

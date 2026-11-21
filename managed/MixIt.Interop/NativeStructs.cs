@@ -364,6 +364,14 @@ internal struct MixitLayerConfig
     public float DestH;
     public float Opacity;
     public uint Reserved;
+    public int KeyType;
+    public uint KeyColor;
+    public float KeySimilarity;
+    public float KeySmoothness;
+    public float KeySpill;
+    public float LumaThreshold;
+    public float LumaSoftness;
+    public uint KeyFlags;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -481,7 +489,7 @@ internal static class NativeStructSizes
     public const int AudioInsertConfig = 40;
     public const int AudioInsertInfo = 320;
     public const int AudioInsertParameter = 256;
-    public const int LayerConfig = 48;
+    public const int LayerConfig = 80;
     public const int CaptureDeviceInfo = 648;
     public const int CaptureSourceConfig = 32;
     public const int InputStats = 144;

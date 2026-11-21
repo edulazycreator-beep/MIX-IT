@@ -16,10 +16,12 @@
 
 static_assert(sizeof(mixit_session_config) == 40);
 constexpr std::uint32_t kSessionConfigV02Size = 32;
+constexpr std::uint32_t kLayerConfigV03Size = 48;
+static_assert(sizeof(mixit_layer_config) == 80);
+static_assert(sizeof(mixit_overlay_info) == 16);
 static_assert(sizeof(mixit_test_source_config) == 32);
 static_assert(sizeof(mixit_session_stats) == 168);
 static_assert(offsetof(mixit_session_stats, preview_input_id) == 96);
-static_assert(sizeof(mixit_layer_config) == 48);
 
 // Size of mixit_session_stats as defined by API 0.2 (before appended fields).
 constexpr std::uint32_t kSessionStatsV02Size = 96;
@@ -103,6 +105,32 @@ mixit_result copy_frame(const char* fn, mixit_session session, media::Bus bus, u
         }
         return report(fn, r);
     });
+}
+
+// Converts a caller's layer struct (0.3 size or newer) into the engine form.
+mixit_result to_layer_config(const char* fn, const mixit_layer_config* layer, media::LayerConfig& cfg) {
+    if (!mixit::abi::struct_size_at_least(layer, kLayerConfigV03Size)) {
+        return fail(fn, MIXIT_E_INVALID_ARGUMENT, "layer NULL or struct_size too small");
+    }
+    mixit_layer_config c{};
+    std::memcpy(&c, layer, std::min<std::size_t>(layer->struct_size, sizeof(c)));  // shorter = older ABI
+    if (layer->struct_size < sizeof(mixit_layer_config)) c.key_type = MIXIT_KEY_NONE;
+    if (c.reserved != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "reserved must be 0");
+    if ((c.key_flags & ~MIXIT_KEY_FLAG_INVERT) != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown key flags");
+    cfg.input_id = c.input_id;
+    cfg.crop = {c.crop_x, c.crop_y, c.crop_w, c.crop_h};
+    cfg.dest = {c.dest_x, c.dest_y, c.dest_w, c.dest_h};
+    cfg.opacity = c.opacity;
+    cfg.key.type = static_cast<media::KeyType>(c.key_type);
+    cfg.key.color = c.key_color;
+    cfg.key.similarity = c.key_similarity;
+    cfg.key.smoothness = c.key_smoothness;
+    cfg.key.spill = c.key_spill;
+    cfg.key.threshold = c.luma_threshold;
+    cfg.key.softness = c.luma_softness;
+    cfg.key.invert = (c.key_flags & MIXIT_KEY_FLAG_INVERT) != 0;
+    if (cfg.key.type == media::KeyType::None) cfg.key = media::KeySettings{};
+    return MIXIT_OK;
 }
 
 }  // namespace
@@ -405,18 +433,54 @@ MIXIT_API mixit_result MIXIT_CALL mixit_session_start_transition(mixit_session s
 MIXIT_API mixit_result MIXIT_CALL mixit_session_set_layer(mixit_session session, int32_t bus, uint32_t index,
                                                            const mixit_layer_config* layer) {
     constexpr const char* fn = "mixit_session_set_layer";
-    if (!struct_size_ok(layer)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "layer NULL or struct_size too small");
-    if (layer->reserved != 0) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "reserved must be 0");
+    media::LayerConfig cfg;
+    if (mixit_result r = to_layer_config(fn, layer, cfg); r != MIXIT_OK) return r;
     if (bus != MIXIT_BUS_PROGRAM && bus != MIXIT_BUS_PREVIEW) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "unknown bus");
     return guarded(fn, [&]() -> mixit_result {
         const auto s = resolve(session);
         if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
-        media::LayerConfig cfg;
-        cfg.input_id = layer->input_id;
-        cfg.crop = {layer->crop_x, layer->crop_y, layer->crop_w, layer->crop_h};
-        cfg.dest = {layer->dest_x, layer->dest_y, layer->dest_w, layer->dest_h};
-        cfg.opacity = layer->opacity;
         return report(fn, s->set_layer(static_cast<media::Bus>(bus), index, cfg));
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_set_overlay(mixit_session session, uint32_t channel,
+                                                             const mixit_layer_config* layer) {
+    constexpr const char* fn = "mixit_session_set_overlay";
+    media::LayerConfig cfg;
+    if (mixit_result r = to_layer_config(fn, layer, cfg); r != MIXIT_OK) return r;
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = resolve(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        return report(fn, s->set_overlay(channel, cfg));
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_show_overlay(mixit_session session, uint32_t channel, int32_t visible,
+                                                              uint32_t fade_frames) {
+    constexpr const char* fn = "mixit_session_show_overlay";
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = resolve(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        return report(fn, s->show_overlay(channel, visible != 0, fade_frames));
+    });
+}
+
+MIXIT_API mixit_result MIXIT_CALL mixit_session_get_overlay(mixit_session session, uint32_t channel,
+                                                             mixit_overlay_info* out_info) {
+    constexpr const char* fn = "mixit_session_get_overlay";
+    if (!struct_size_ok(out_info)) return fail(fn, MIXIT_E_INVALID_ARGUMENT, "out_info NULL or struct_size too small");
+    return guarded(fn, [&]() -> mixit_result {
+        const auto s = resolve(session);
+        if (!s) return fail(fn, MIXIT_E_INVALID_HANDLE, kInvalidSession);
+        media::Session::OverlayInfo info;
+        if (Status st = s->overlay_info(channel, info); !st.is_ok()) return report(fn, st);
+        mixit_overlay_info c{};
+        c.struct_size = sizeof(c);
+        c.input_id = info.layer.input_id;
+        c.visible = info.visible ? 1 : 0;
+        c.level = info.level;
+        write_out(out_info, c);
+        return MIXIT_OK;
     });
 }
 

@@ -1,5 +1,34 @@
 # MIX IT — Test Report
 
+## Run: Milestone 5 (streaming and recording) — 2026-11-21
+
+### GitHub Actions
+
+| Run (commit) | Result |
+|---|---|
+| 44846054396 (778f0ec, M5b) | ❌ Windows: recorded A/V offset 85 ms with `h264_mf` (2 tests); isolation test too impatient for Windows' ~2 s refused-connection time. Linux: SRT test failed under TSan — lock-order report inside libsrt (third party). |
+| 8ac9b09 | ❌ Windows: offset now 64 ms — diagnosis printed by the test: video timestamps exact, audio 3073 samples early → audio dropped before the first (late) video packet. |
+| cc2cc38 | ✅ Windows: native **141/141** (Media Foundation H.264 chosen automatically), WPF 0 warnings, xUnit **44/44**, self-test PASS incl. a 2.5 s recording · Linux: see the run page |
+
+### Local (2-core Linux)
+
+| Check | Result |
+|---|---|
+| Native Debug / Release / ASan+UBSan / TSan (`-j2`) | ✅ 141/141 each |
+| Output tests against the pinned LGPL FFmpeg 9.0.2 (OpenH264 chosen) | ✅ 10/10, A/V 0.021 ms |
+| A/V regression check with a look-ahead encoder (x264 `tune=film`, local only) | 94.6 ms before the fix, 0.021 ms after |
+| MinGW-w64 cross-build | ✅ 60 exports |
+| Managed (local runner) | ✅ 44/44 |
+
+### New tests (M5)
+
+Native (10), all verifying by **decoding what was written**: encoder query; program → MP4 with frame count, codec, size, channels, start at 0, audio coverage, flash/click A/V offset (< 40 ms; measured 0.021 ms) and a second take not overwriting the first; shared encoder → MKV + 2 s segmented TS (every segment decodes from its start); RTMP to a local FFmpeg listener; SRT to a local listener; broken RTMP destination does not disturb a recording or the session clock and stops promptly; HLS playlist + segments; ISO at the input's own size with A/V check; validation; url redaction. Managed (2): production outputs + ISO across a session rebuild, finalized files, ISO removed with its input; url redaction.
+
+### Limitations
+
+- No hardware encoder ran (no GPU in CI); no real streaming platform; RTMPS never connected to a TLS server.
+- 1 h recording/stream soak not run.
+
 ## Run: Milestone 4 (audio engine) — 2026-11-19
 
 ### GitHub Actions

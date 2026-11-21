@@ -9,8 +9,8 @@ A milestone is closed only when its exit criteria are met **on Windows**.
 | 2 | Media pipeline foundation | TESTED (Linux + Windows CI); 1 h soak on Windows hardware pending | synthetic A/V session runs 1 h with < 1 ms drift; no steady-state allocation; queues bounded under overload |
 | 3 | First working video pipeline / video engine | IMPLEMENTED — tested on Linux + Windows CI; reference-hardware run, real capture devices and GPU measurements pending (details below) | file → GPU → preview/program → cut, 1080p60 without drops on reference HW; native monitors in WPF |
 | 4 | Audio engine | IMPLEMENTED — tested on Linux + Windows CI; real audio devices, ASIO (licence decision) and commercial plug-ins pending (details below) | WASAPI (+ASIO) capture, mixer, buses, DSP, meters/LUFS, sync; no underruns in 1 h soak; VST3 host design (out-of-process) |
-| 5 | Streaming and recording | IN_PROGRESS | RTMP/RTMPS/SRT/HLS multi-destination with isolation; NVENC/QSV/AMF detection; program + ISO recording with recovery |
-| 6 | Graphics and production | PLANNED | titles/overlays/chroma/luma key, multiview, replay, virtual sets (2D); HTML renderer ADR |
+| 5 | Streaming and recording | IMPLEMENTED — tested on Linux + Windows CI; hardware encoders and real platforms pending | RTMP/RTMPS/SRT/HLS multi-destination with isolation; NVENC/QSV/AMF detection; program + ISO recording with recovery |
+| 6 | Graphics and production | IN_PROGRESS | titles/overlays/chroma/luma key, multiview, replay, virtual sets (2D); HTML renderer ADR |
 | 7 | Advanced features | PLANNED | command API, macros/automation, remote control (documented protocol), PTZ, tally, plugin SDK |
 | 8 | Desktop experience | PLANNED | full operator UI, workspace customization, profiles, diagnostics dashboard, performance presets |
 | 9 | Commercial release | PLANNED | Free/Professional licensing (signed licences, offline grace), installer, compatibility lab, legal review, docs |
@@ -79,3 +79,17 @@ A milestone is closed only when its exit criteria are met **on Windows**.
 | VST3 out-of-process host, editors, latency compensation | PLANNED | before M9 |
 | Desktop Audio Mixer | TESTED (automated) | self-test |
 | Exit: 1 h without underruns on hardware | PENDING | Windows workstation |
+
+## Milestone 5 — Streaming and recording (detail)
+
+| Deliverable | Status | Evidence / note |
+|---|---|---|
+| Shared encoder pipelines, timeline timestamps (ADR-0010) | TESTED | A/V 0.02 ms in recordings |
+| Encoder detection: NVENC, QSV, AMF, MF, OpenH264 | TESTED (software) / EXPERIMENTAL (hardware) | no GPU in CI |
+| Recording: MP4/MOV (fragmented)/MKV/TS, segments, no overwrite, free space | TESTED | |
+| ISO recording | TESTED | |
+| RTMP, SRT, HLS (folder) | TESTED | local servers |
+| RTMPS | EXPERIMENTAL | not run against TLS |
+| Isolation, reconnect, statistics, credential redaction | TESTED | |
+| Desktop Streaming & Recording | TESTED (automated) | self-test records |
+| Exit: 1 h stream + recording on hardware | PENDING | Windows workstation |

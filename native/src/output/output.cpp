@@ -14,7 +14,10 @@
 
 #if MIXIT_HAVE_FFMPEG
 
+#include <cctype>
 #include <condition_variable>
+#include <cstdarg>
+#include <cstdio>
 #include <semaphore>
 
 extern "C" {
@@ -86,6 +89,36 @@ Status resolve_format(const OutputConfig& c, std::string& out) {
     else if (ends(".flv")) out = "flv";
     else return {MIXIT_E_INVALID_ARGUMENT, "cannot tell the format from the url; set it explicitly"};
     return Status::ok();
+}
+
+// FFmpeg's own messages (stderr) can contain urls, e.g. in protocol
+// errors. Replace every url in them with its redacted form (stream keys,
+// passwords, query values) before printing.
+void redacting_log_callback(void* avcl, int level, const char* fmt, va_list vl) {
+    if (level > av_log_get_level()) return;
+    char line[1024];
+    int print_prefix = 1;
+    va_list copy;
+    va_copy(copy, vl);
+    av_log_format_line2(avcl, level, fmt, copy, line, sizeof(line), &print_prefix);
+    va_end(copy);
+    std::string text = line;
+    std::size_t pos = 0;
+    while ((pos = text.find("://", pos)) != std::string::npos) {
+        std::size_t begin = pos;
+        while (begin > 0 && (std::isalnum(static_cast<unsigned char>(text[begin - 1])) != 0 || text[begin - 1] == '+')) --begin;
+        std::size_t end = pos + 3;
+        while (end < text.size() && text[end] != ' ' && text[end] != '\n' && text[end] != '\'' && text[end] != '"') ++end;
+        const std::string redacted = redact_url(text.substr(begin, end - begin));
+        text.replace(begin, end - begin, redacted);
+        pos = begin + redacted.size();
+    }
+    std::fputs(text.c_str(), stderr);
+}
+
+void install_log_redaction() {
+    static std::once_flag once;
+    std::call_once(once, [] { av_log_set_callback(&redacting_log_callback); });
 }
 
 // H.264 encoders in order of preference: hardware first, then software.
@@ -1134,6 +1167,7 @@ Status OutputManager::add(const OutputConfig& config, std::uint32_t& out_id) {
     }
     std::string format;
     if (Status st = resolve_format(config, format); !st.is_ok()) return st;
+    install_log_redaction();
     std::lock_guard lock(mutex_);
     auto o = std::make_unique<Output>();
     o->id = next_id_++;

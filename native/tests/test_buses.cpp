@@ -201,6 +201,102 @@ TEST(Buses, PictureInPictureLayerShowsTheSecondInput) {
     EXPECT_EQ(s.stats().composited_frames, composited);
 }
 
+TEST(Buses, KeyedLayerAndOlderLayerStruct) {
+    Studio s;
+    ASSERT_EQ(mixit_session_set_program_input(s.session, s.a), MIXIT_OK);
+    mixit_layer_config l{};
+    l.struct_size = sizeof(l);
+    l.input_id = s.b;
+    l.crop_w = l.crop_h = 1.0f;
+    l.dest_w = l.dest_h = 1.0f;
+    l.opacity = 1.0f;
+    // Luma key with a threshold above every pixel of the test pattern's dark
+    // background: the black areas of B become transparent and show A.
+    l.key_type = MIXIT_KEY_LUMA;
+    l.luma_threshold = 0.02f;
+    l.luma_softness = 0.01f;
+    ASSERT_EQ(mixit_session_set_layer(s.session, MIXIT_BUS_PROGRAM, 0, &l), MIXIT_OK) << last_error();
+    l.key_similarity = 2.0f;
+    l.key_type = MIXIT_KEY_CHROMA;
+    EXPECT_EQ(mixit_session_set_layer(s.session, MIXIT_BUS_PROGRAM, 1, &l), MIXIT_E_INVALID_ARGUMENT) << "range";
+    l.key_similarity = 0.1f;
+    l.key_type = 7;
+    EXPECT_EQ(mixit_session_set_layer(s.session, MIXIT_BUS_PROGRAM, 1, &l), MIXIT_E_INVALID_ARGUMENT) << "unknown type";
+    l.key_type = MIXIT_KEY_NONE;
+    l.key_flags = 0x10;
+    EXPECT_EQ(mixit_session_set_layer(s.session, MIXIT_BUS_PROGRAM, 1, &l), MIXIT_E_INVALID_ARGUMENT) << "unknown flag";
+    // An API 0.3 caller (48-byte struct) still works and gets no key.
+    l.key_flags = 0;
+    l.struct_size = 48;
+    l.key_type = 99;  // beyond its declared size: ignored
+    EXPECT_EQ(mixit_session_set_layer(s.session, MIXIT_BUS_PROGRAM, 1, &l), MIXIT_OK) << last_error();
+    l.struct_size = 40;
+    EXPECT_EQ(mixit_session_set_layer(s.session, MIXIT_BUS_PROGRAM, 1, &l), MIXIT_E_INVALID_ARGUMENT);
+    l.struct_size = sizeof(l);
+    l.input_id = 0;
+    ASSERT_EQ(mixit_session_set_layer(s.session, MIXIT_BUS_PROGRAM, 1, &l), MIXIT_OK);
+
+    ASSERT_EQ(mixit_session_start(s.session), MIXIT_OK);
+    wait_ms(300);
+    auto buf = s.frame(MIXIT_BUS_PROGRAM);
+    ASSERT_TRUE(buf.has_value());
+    // B is drawn full frame on top, but its black background is keyed out:
+    // A's frame code (white/black blocks) is not fully covered. With the
+    // full-frame copy of B instead (no key) we would read B's code.
+    const auto code = mixit::media::decode_frame_code(buf->data(), W * 4, W, H);
+    ASSERT_TRUE(code.has_value());
+    EXPECT_GT(s.stats().composited_frames, 0u);
+}
+
+TEST(Buses, OverlayChannelStaysOnAirAcrossCutsAndFades) {
+    Studio s;
+    ASSERT_EQ(mixit_session_set_program_input(s.session, s.a), MIXIT_OK);
+    ASSERT_EQ(mixit_session_set_preview_input(s.session, s.b), MIXIT_OK);
+    mixit_layer_config l{};
+    l.struct_size = sizeof(l);
+    l.input_id = s.b;
+    l.crop_w = l.crop_h = 1.0f;
+    l.dest_x = l.dest_y = 0.5f;
+    l.dest_w = l.dest_h = 0.5f;
+    l.opacity = 1.0f;
+    EXPECT_EQ(mixit_session_show_overlay(s.session, 0, 1, 0), MIXIT_E_INVALID_STATE) << "empty channel";
+    ASSERT_EQ(mixit_session_set_overlay(s.session, 0, &l), MIXIT_OK) << last_error();
+    EXPECT_EQ(mixit_session_set_overlay(s.session, MIXIT_OVERLAY_CHANNELS, &l), MIXIT_E_INVALID_ARGUMENT);
+    EXPECT_EQ(mixit_session_show_overlay(s.session, 0, 1, 601), MIXIT_E_INVALID_ARGUMENT);
+    ASSERT_EQ(mixit_session_start(s.session), MIXIT_OK);
+    ASSERT_EQ(mixit_session_show_overlay(s.session, 0, 1, 15), MIXIT_OK);  // 0.5 s fade in at 30 fps
+    mixit_overlay_info info{};
+    info.struct_size = sizeof(info);
+    wait_ms(200);
+    ASSERT_EQ(mixit_session_get_overlay(s.session, 0, &info), MIXIT_OK);
+    EXPECT_EQ(info.visible, 1);
+    EXPECT_GT(info.level, 0.0f);
+    EXPECT_LT(info.level, 1.0f) << "still fading";
+    wait_ms(600);
+    ASSERT_EQ(mixit_session_get_overlay(s.session, 0, &info), MIXIT_OK);
+    EXPECT_FLOAT_EQ(info.level, 1.0f);
+    auto quadrant_source = [&]() -> uint32_t {
+        auto buf = s.frame(MIXIT_BUS_PROGRAM);
+        if (!buf) return 0;
+        const auto q = mixit::media::decode_frame_code(buf->data() + (H / 2) * W * 4 + (W / 2) * 4, W * 4, W / 2, H / 2);
+        return q ? q->source_id : 0u;
+    };
+    EXPECT_EQ(quadrant_source(), s.b);
+    // A cut swaps the buses; the overlay stays on top of the new program.
+    ASSERT_EQ(mixit_session_cut(s.session), MIXIT_OK);
+    wait_ms(200);
+    EXPECT_EQ(s.stats().program_input_id, s.b);
+    EXPECT_EQ(quadrant_source(), s.b);
+    auto buf = s.frame(MIXIT_BUS_PROGRAM);
+    ASSERT_TRUE(buf.has_value());
+    ASSERT_EQ(mixit_session_show_overlay(s.session, 0, 0, 0), MIXIT_OK);  // cut out
+    ASSERT_EQ(mixit_session_set_program_input(s.session, s.a), MIXIT_OK);
+    wait_ms(200);
+    ASSERT_EQ(mixit_session_get_overlay(s.session, 0, &info), MIXIT_OK);
+    EXPECT_EQ(info.level, 0.0f);
+    EXPECT_EQ(quadrant_source(), 0u) << "the quadrant shows A's picture, not a frame code of B";
+}
+
 TEST(Buses, LayerValidation) {
     Studio s;
     mixit_layer_config l{};
@@ -353,3 +449,100 @@ TEST(Capture, EnumerationAndValidation) {
     small.struct_size = 8;
     EXPECT_EQ(mixit_enumerate_capture_devices(s.engine, &small, 1, &count), MIXIT_E_INVALID_ARGUMENT);
 }
+
+#if MIXIT_HAVE_GRAPHICS
+TEST(Graphics, LowerThirdOnAnOverlayWithLiveFieldsAndTimer) {
+    Studio s;
+    ASSERT_EQ(mixit_session_set_program_input(s.session, s.a), MIXIT_OK);
+    const char* scene = R"({"elements":[
+        {"type":"rect","x":0.05,"y":0.75,"w":0.6,"h":0.15,"color":"#FF1060E0"},
+        {"type":"text","x":0.07,"y":0.76,"w":0.56,"h":0.13,"text":"{name}","size":0.08,"color":"#FFFFFF","bold":true},
+        {"type":"text","x":0.8,"y":0.02,"w":0.18,"h":0.08,"text":"{timer}","size":0.06}]})";
+    mixit_graphics_source_config gc{};
+    gc.struct_size = sizeof(gc);
+    gc.width = W;
+    gc.height = H;
+    gc.scene_json = "{\"elements\":[{\"type\":\"blob\"}]}";
+    uint32_t g = 0;
+    EXPECT_EQ(mixit_session_add_graphics_source(s.session, &gc, &g), MIXIT_E_INVALID_ARGUMENT);
+    EXPECT_NE(last_error().find("type must be"), std::string::npos) << last_error();
+    gc.scene_json = scene;
+    ASSERT_EQ(mixit_session_add_graphics_source(s.session, &gc, &g), MIXIT_OK) << last_error();
+    EXPECT_EQ(mixit_session_set_graphics_field(s.session, s.a, "name", "x"), MIXIT_E_INVALID_ARGUMENT) << "not graphics";
+    EXPECT_EQ(mixit_session_set_graphics_field(s.session, g, "time", "x"), MIXIT_E_INVALID_ARGUMENT) << "built in";
+    ASSERT_EQ(mixit_session_set_graphics_field(s.session, g, "name", "Siti Rahma"), MIXIT_OK);
+    ASSERT_EQ(mixit_session_set_graphics_timer(s.session, g, MIXIT_GRAPHICS_TIMER_COUNTDOWN, 10'000, 1), MIXIT_OK);
+
+    mixit_layer_config l{};
+    l.struct_size = sizeof(l);
+    l.input_id = g;
+    l.crop_w = l.crop_h = l.dest_w = l.dest_h = 1.0f;
+    l.opacity = 1.0f;
+    ASSERT_EQ(mixit_session_set_overlay(s.session, 0, &l), MIXIT_OK);
+    ASSERT_EQ(mixit_session_show_overlay(s.session, 0, 1, 0), MIXIT_OK);
+    ASSERT_EQ(mixit_session_start(s.session), MIXIT_OK);
+    EXPECT_EQ(mixit_session_add_graphics_source(s.session, &gc, &g), MIXIT_E_INVALID_STATE);
+    auto ink_in_box = [&](const std::vector<uint8_t>& buf) {
+        // White text pixels inside the blue box.
+        int n = 0;
+        for (uint32_t y = H * 76 / 100; y < H * 89 / 100; ++y)
+            for (uint32_t x = W * 7 / 100; x < W * 63 / 100; ++x) {
+                const uint8_t* p = buf.data() + (y * W + x) * 4;
+                if (p[0] > 200 && p[1] > 200 && p[2] > 200) ++n;
+            }
+        return n;
+    };
+    std::optional<std::vector<uint8_t>> buf;
+    for (int i = 0; i < 60; ++i) {  // first rendered frame on air
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        buf = s.frame(MIXIT_BUS_PROGRAM);
+        ASSERT_TRUE(buf.has_value());
+        if (ink_in_box(*buf) > 200) break;
+    }
+    const uint8_t* box = buf->data() + ((H * 82 / 100) * W + W * 60 / 100) * 4;
+    EXPECT_EQ(box[0], 0xE0) << "lower-third box drawn on program";
+    EXPECT_EQ(box[1], 0x60);
+    EXPECT_EQ(box[2], 0x10);
+    const int ink_long = ink_in_box(*buf);
+    EXPECT_GT(ink_long, 200) << "the name is written";
+
+    ASSERT_EQ(mixit_session_set_graphics_field(s.session, g, "name", "Ali"), MIXIT_OK);
+    int ink_short = ink_long;
+    for (int i = 0; i < 60 && ink_short >= ink_long * 2 / 3; ++i) {  // shown within a few frames (slower under sanitizers)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        buf = s.frame(MIXIT_BUS_PROGRAM);
+        ASSERT_TRUE(buf.has_value());
+        ink_short = ink_in_box(*buf);
+    }
+    EXPECT_GT(ink_short, 50);
+    EXPECT_LT(ink_short, ink_long * 2 / 3) << "a shorter name uses less ink: live update";
+
+    mixit_graphics_info info{};
+    info.struct_size = sizeof(info);
+    ASSERT_EQ(mixit_session_get_graphics_info(s.session, g, &info), MIXIT_OK);
+    EXPECT_EQ(info.timer_mode, MIXIT_GRAPHICS_TIMER_COUNTDOWN);
+    EXPECT_EQ(info.timer_running, 1);
+    EXPECT_LT(info.timer_ms, 10'000);
+    EXPECT_GT(info.timer_ms, 9'000);
+    EXPECT_GE(info.frames_rendered, 2u);
+    EXPECT_STREQ(info.warnings, "");
+    ASSERT_EQ(mixit_session_set_graphics_timer(s.session, g, MIXIT_GRAPHICS_TIMER_COUNTDOWN, -1, 0), MIXIT_OK);  // pause
+    ASSERT_EQ(mixit_session_get_graphics_info(s.session, g, &info), MIXIT_OK);
+    const int64_t paused = info.timer_ms;
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    ASSERT_EQ(mixit_session_get_graphics_info(s.session, g, &info), MIXIT_OK);
+    EXPECT_EQ(info.timer_ms, paused);
+    EXPECT_EQ(info.timer_running, 0);
+    EXPECT_EQ(mixit_session_set_graphics_timer(s.session, g, 9, 0, 0), MIXIT_E_INVALID_ARGUMENT);
+
+    EXPECT_EQ(mixit_session_set_graphics_scene(s.session, g, "{"), MIXIT_E_INVALID_ARGUMENT);
+    ASSERT_EQ(mixit_session_set_graphics_scene(s.session, g, R"({"elements":[{"type":"image","path":"/no/logo.png"}]})"),
+              MIXIT_OK);
+    for (int i = 0; i < 60; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        ASSERT_EQ(mixit_session_get_graphics_info(s.session, g, &info), MIXIT_OK);
+        if (info.warnings[0] != 0) break;
+    }
+    EXPECT_NE(std::string(info.warnings).find("logo.png"), std::string::npos) << "missing image reported";
+}
+#endif
