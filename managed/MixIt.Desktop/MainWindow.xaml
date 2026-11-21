@@ -82,6 +82,9 @@
             <views:AudioMixerView DataContext="{Binding AudioMixer}"
                                   Visibility="{Binding DataContext.ShowAudioMixer, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
 
+            <views:GraphicsView DataContext="{Binding Graphics}"
+                                Visibility="{Binding DataContext.ShowGraphics, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
+
             <views:OutputsView DataContext="{Binding Outputs}"
                                Visibility="{Binding DataContext.ShowOutputs, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
 

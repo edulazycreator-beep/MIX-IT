@@ -16,7 +16,7 @@ namespace MixIt.Desktop;
 internal static class SelfTest
 {
     public static async Task RunProductionAsync(Task engineStart, ProductionViewModel vm, AudioMixerViewModel mixer,
-        OutputsViewModel outputs, ProductionService production, ILogger logger, Application app)
+        OutputsViewModel outputs, GraphicsViewModel graphics, ProductionService production, ILogger logger, Application app)
     {
         var failures = new List<string>();
         try
@@ -111,6 +111,36 @@ internal static class SelfTest
 
             await vm.ToggleProductionAsync();
             if (vm.IsRunning) failures.Add("production did not stop");
+
+            // Graphics Studio: a lower third with a live field on overlay 1.
+            graphics.IsActive = true;
+            graphics.Template = graphics.Templates.First(t => t.Id == "lower-third");
+            graphics.AddTemplateCommand.Execute(null);
+            GraphicsItemViewModel? title = graphics.Items.LastOrDefault();
+            if (title is null || graphics.Error is not null)
+            {
+                failures.Add($"could not add a lower third: {graphics.Error}");
+            }
+            else
+            {
+                title.Fields.First(f => f.Name == "name").Value = "Self-test";
+                OverlayChannelViewModel ch = graphics.Channels[0];
+                ch.Input = ch.Inputs.First(i => i.InputId == title.Id);
+                await vm.ToggleProductionAsync();
+                ch.CutCommand.Execute(null);
+                await Task.Delay(500);
+                (uint? onChannel, _, OverlayState overlay) = production.GetOverlay(0);
+                GraphicsInfo gi = production.GetGraphicsInfo(title.Id);
+                if (onChannel != title.Id || overlay.Level < 1f) failures.Add($"overlay 1 not on air (level {overlay.Level})");
+                if (gi.FramesRendered < 1) failures.Add("the lower third was never rendered");
+                if (gi.Warnings.Length > 0) failures.Add($"graphics warnings: {gi.Warnings}");
+                if (production.GetGraphicsFields(title.Id)["name"] != "Self-test") failures.Add("field edit did not reach the engine");
+                logger.LogInformation("Self-test graphics: overlay level {Level}, {Frames} frames rendered", overlay.Level, gi.FramesRendered);
+                await vm.ToggleProductionAsync();
+            }
+            if (graphics.Error is not null) failures.Add($"graphics error shown: {graphics.Error}");
+            graphics.IsActive = false;
+
             logger.LogInformation(
                 "Self-test production details: monitors {Program}/{Preview} frames, ticks {Ticks}, late {Late}, composited {Composited}, compositor {Compositor}",
                 vm.Program.FramesShown, vm.Preview.FramesShown, s.Ticks, s.LateTicks, s.CompositedFrames, s.Compositor);

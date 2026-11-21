@@ -17,20 +17,21 @@ public sealed class MainViewModel : ObservableObject
     private bool _engineHealthy;
 
     public MainViewModel(EngineHost host, DiagnosticsViewModel diagnostics, ProductionViewModel production,
-        AudioMixerViewModel audioMixer, OutputsViewModel outputs)
+        AudioMixerViewModel audioMixer, OutputsViewModel outputs, GraphicsViewModel graphics)
     {
         _host = host;
         Diagnostics = diagnostics;
         Production = production;
         AudioMixer = audioMixer;
         Outputs = outputs;
+        Graphics = graphics;
         Sections =
         [
             new("Production Studio", "Available (M3)", true),
             new("Input Manager", "Planned — inputs are added in Production Studio", false),
             new("Audio Mixer", "Available — mixer, EQ, dynamics, meters (M4)", true),
             new("Streaming & Recording", "Available — record, ISO, RTMP/RTMPS/SRT/HLS (M5)", true),
-            new("Graphics Studio", "Planned — Milestone 6", false),
+            new("Graphics Studio", "Available — titles, lower thirds, clock, scoreboard, overlay channels, keys (M6)", true),
             new("Replay", "Planned — Milestone 6", false),
             new("Virtual Studio", "Planned — Milestone 6", false),
             new("Automation", "Planned — Milestone 7", false),
@@ -53,6 +54,8 @@ public sealed class MainViewModel : ObservableObject
 
     public OutputsViewModel Outputs { get; }
 
+    public GraphicsViewModel Graphics { get; }
+
     public SectionItem SelectedSection
     {
         get => _selectedSection;
@@ -63,10 +66,12 @@ public sealed class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(ShowProduction));
             OnPropertyChanged(nameof(ShowAudioMixer));
             OnPropertyChanged(nameof(ShowOutputs));
+            OnPropertyChanged(nameof(ShowGraphics));
             OnPropertyChanged(nameof(ShowPlaceholder));
             Production.IsActive = ShowProduction;  // monitors and meters poll only while visible
             AudioMixer.IsActive = ShowAudioMixer;
             Outputs.IsActive = ShowOutputs;
+            Graphics.IsActive = ShowGraphics;
         }
     }
 
@@ -78,7 +83,9 @@ public sealed class MainViewModel : ObservableObject
 
     public bool ShowOutputs => SelectedSection.Title == "Streaming & Recording";
 
-    public bool ShowPlaceholder => !ShowDiagnostics && !ShowProduction && !ShowAudioMixer && !ShowOutputs;
+    public bool ShowGraphics => SelectedSection.Title == "Graphics Studio";
+
+    public bool ShowPlaceholder => !ShowDiagnostics && !ShowProduction && !ShowAudioMixer && !ShowOutputs && !ShowGraphics;
 
     public string EngineStatus
     {

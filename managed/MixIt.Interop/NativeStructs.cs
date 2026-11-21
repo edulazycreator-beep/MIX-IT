@@ -209,6 +209,37 @@ internal unsafe struct MixitAudioDeviceInfo
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct MixitOverlayInfo
+{
+    public uint StructSize;
+    public uint InputId;
+    public int Visible;
+    public float Level;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitGraphicsSourceConfig
+{
+    public uint StructSize;
+    public uint Width;
+    public uint Height;
+    public uint Reserved;
+    public byte* SceneJson;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixitGraphicsInfo
+{
+    public uint StructSize;
+    public int TimerMode;
+    public long TimerMs;
+    public int TimerRunning;
+    public uint Reserved;
+    public ulong FramesRendered;
+    public fixed byte Warnings[256];
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal unsafe struct MixitOutputConfig
 {
     public uint StructSize;
@@ -484,6 +515,9 @@ internal static class NativeStructSizes
     public const int AudioCaptureConfig = 16;
     public const int Vst3PluginInfo = 1008;
     public const int OutputConfig = 56;
+    public const int OverlayInfo = 16;
+    public const int GraphicsSourceConfig = 24;
+    public const int GraphicsInfo = 288;
     public const int OutputStats = 888;
     public const int VideoEncoderInfo = 360;
     public const int AudioInsertConfig = 40;

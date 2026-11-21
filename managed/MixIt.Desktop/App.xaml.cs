@@ -35,6 +35,7 @@ public partial class App : Application
         services.AddSingleton<ProductionViewModel>();
         services.AddSingleton<AudioMixerViewModel>();
         services.AddSingleton<OutputsViewModel>();
+        services.AddSingleton<GraphicsViewModel>();
         services.AddSingleton<DiagnosticsViewModel>();
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<MainWindow>();
@@ -65,6 +66,7 @@ public partial class App : Application
         {
             _ = SelfTest.RunProductionAsync(init, _services.GetRequiredService<ProductionViewModel>(),
                 _services.GetRequiredService<AudioMixerViewModel>(), _services.GetRequiredService<OutputsViewModel>(),
+                _services.GetRequiredService<GraphicsViewModel>(),
                 _services.GetRequiredService<ProductionService>(), _services.GetRequiredService<ILogger<App>>(), this);
         }
     }

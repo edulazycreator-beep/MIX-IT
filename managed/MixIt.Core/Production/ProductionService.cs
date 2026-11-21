@@ -13,6 +13,8 @@ public enum ProductionInputKind
     CaptureDevice,
     /// <summary>Microphone / line input, audio only (EXPERIMENTAL).</summary>
     AudioCapture,
+    /// <summary>Titles, lower thirds, clock, scoreboard (M6).</summary>
+    Graphics,
 }
 
 /// <summary>An input of the current production, as the operator sees it.</summary>
@@ -62,6 +64,7 @@ public sealed class ProductionService : IDisposable
     private readonly List<InputSpec> _specs = [];
     private readonly List<ProductionInput> _inputs = [];
     private readonly List<OutputSpec> _outputs = [];
+    private readonly OverlaySpec[] _overlays = Enumerable.Range(0, NativeSession.OverlayChannels).Select(_ => new OverlaySpec()).ToArray();
     private int _nextOutputId = 1;
     private NativeSession? _session;
     private ProductionFormat _format = ProductionFormat.Standard[0];
@@ -164,6 +167,12 @@ public sealed class ProductionService : IDisposable
             if (o.NativeId is { } nid) session.RemoveOutput(nid);
             _outputs.Remove(o);
             _logger.LogInformation("Output {Name} removed with its input", o.Name);
+        }
+        for (int c = 0; c < _overlays.Length; c++)
+        {
+            if (!ReferenceEquals(_overlays[c].Source, _specs[index])) continue;
+            _overlays[c] = new OverlaySpec();
+            session.SetOverlay(c, new LayerSettings { InputId = 0 });
         }
         session.RemoveInput(inputId);
         _inputs.RemoveAt(index);
@@ -458,14 +467,24 @@ public sealed class ProductionService : IDisposable
         }),
         ProductionInputKind.CaptureDevice => session.AddCaptureSource(spec.Path!),
         ProductionInputKind.AudioCapture => session.AddAudioCaptureSource(spec.Path),
+        ProductionInputKind.Graphics => AddGraphicsToSession(session, spec),
         _ => session.AddFileSource(spec.Path!, spec.Loop),
     };
+
+    private uint AddGraphicsToSession(NativeSession session, InputSpec spec)
+    {
+        uint id = session.AddGraphicsSource((uint)_format.Width, (uint)_format.Height, spec.Scene!);
+        foreach ((string name, string value) in spec.Fields) session.SetGraphicsField(id, name, value);
+        if (spec.Timer is { } t) session.SetGraphicsTimer(id, t.Mode, t.Value, false);
+        return id;
+    }
 
     private string Describe(InputSpec spec) => spec.Kind switch
     {
         ProductionInputKind.TestSignal => $"{_format.Width}x{_format.Height} @ {_format.FrameRate.Value:0.##}",
         ProductionInputKind.CaptureDevice => "Capture device (experimental)",
         ProductionInputKind.AudioCapture => "Audio input (experimental)",
+        ProductionInputKind.Graphics => "Graphics",
         _ => spec.Loop ? "Media file, looping" : "Media file",
     };
 
@@ -491,6 +510,7 @@ public sealed class ProductionService : IDisposable
             }
             foreach ((AudioBus bus, AudioBusSettings settings) in _buses) session.SetAudioBus(bus, settings);
             foreach (OutputSpec spec in _outputs) spec.NativeId = session.AddOutput(NativeSettings(spec, session));
+            for (int c = 0; c < _overlays.Length; c++) ApplyOverlay(session, c);
             session.SetMonitorSource(_monitorSource);
             if (_audioOutput is { } o) TryApplyOutput(session, o.Bus, o.DeviceId);
         }
@@ -502,6 +522,106 @@ public sealed class ProductionService : IDisposable
         _pipInputId = null;
         _session = session;
         return session;
+    }
+
+    // ---- graphics (M6) ----
+
+    /// <summary>Adds a graphics input from a template (or custom scene JSON) with initial field values.</summary>
+    public ProductionInput AddGraphics(string name, string sceneJson, IEnumerable<KeyValuePair<string, string>>? fields = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sceneJson);
+        RequireStopped("add inputs");
+        var spec = new InputSpec(ProductionInputKind.Graphics, name.Trim(), null, false) { Scene = sceneJson };
+        foreach ((string k, string v) in fields ?? []) spec.Fields[k] = v;
+        return AddSpec(spec);
+    }
+
+    public IReadOnlyDictionary<string, string> GetGraphicsFields(uint inputId) => GraphicsSpec(inputId).Fields;
+
+    /// <summary>Changes a field on air (shown within ~10 ms).</summary>
+    public void SetGraphicsField(uint inputId, string name, string value)
+    {
+        InputSpec spec = GraphicsSpec(inputId);
+        RequireSession().SetGraphicsField(inputId, name, value);
+        spec.Fields[name] = value;
+    }
+
+    public void SetGraphicsScene(uint inputId, string sceneJson)
+    {
+        InputSpec spec = GraphicsSpec(inputId);
+        RequireSession().SetGraphicsScene(inputId, sceneJson);
+        spec.Scene = sceneJson;
+    }
+
+    /// <summary>Stopwatch/countdown: <paramref name="value"/> null keeps the current value.</summary>
+    public void SetGraphicsTimer(uint inputId, GraphicsTimerMode mode, TimeSpan? value, bool running)
+    {
+        InputSpec spec = GraphicsSpec(inputId);
+        RequireSession().SetGraphicsTimer(inputId, mode, value, running);
+        spec.Timer = (mode, value ?? spec.Timer?.Value);
+    }
+
+    public GraphicsInfo GetGraphicsInfo(uint inputId)
+    {
+        _ = GraphicsSpec(inputId);
+        return RequireSession().GetGraphicsInfo(inputId);
+    }
+
+    private InputSpec GraphicsSpec(uint inputId)
+    {
+        int index = _inputs.FindIndex(i => i.Id == inputId);
+        if (index < 0 || _specs[index].Kind != ProductionInputKind.Graphics) throw new ArgumentException($"Input {inputId} is not a graphics input.", nameof(inputId));
+        return _specs[index];
+    }
+
+    // ---- overlay channels (M6) ----
+
+    /// <summary>Puts an input on an overlay channel (null = empty), full frame unless <paramref name="destination"/> is given.</summary>
+    public void SetOverlay(int channel, uint? inputId, KeySettings? key = null, NormalizedRect? destination = null, float opacity = 1.0f)
+    {
+        if (channel < 0 || channel >= _overlays.Length) throw new ArgumentOutOfRangeException(nameof(channel));
+        InputSpec? source = null;
+        if (inputId is { } id)
+        {
+            int index = _inputs.FindIndex(i => i.Id == id);
+            if (index < 0) throw new ArgumentException($"No input {id}.", nameof(inputId));
+            source = _specs[index];
+        }
+        var o = new OverlaySpec
+        {
+            Source = source,
+            Layer = new LayerSettings { InputId = 0, Key = key ?? KeySettings.None, Destination = destination ?? NormalizedRect.Full, Opacity = opacity },
+            Visible = source is not null && _overlays[channel].Visible,
+        };
+        _overlays[channel] = o;
+        ApplyOverlay(RequireSession(), channel);
+        RaiseChanged();
+    }
+
+    /// <summary>Takes an overlay in or out with a fade over <paramref name="fadeFrames"/> frames.</summary>
+    public void ShowOverlay(int channel, bool visible, int fadeFrames = 0)
+    {
+        if (channel < 0 || channel >= _overlays.Length) throw new ArgumentOutOfRangeException(nameof(channel));
+        RequireSession().ShowOverlay(channel, visible, fadeFrames);
+        _overlays[channel].Visible = visible;
+    }
+
+    /// <summary>Input on the channel (null = empty), its key, and the engine's current state.</summary>
+    public (uint? InputId, KeySettings Key, OverlayState State) GetOverlay(int channel)
+    {
+        OverlaySpec o = _overlays[channel];
+        uint? id = o.Source is null ? null : _inputs[_specs.IndexOf(o.Source)].Id;
+        return (id, o.Layer.Key, RequireSession().GetOverlay(channel));
+    }
+
+    private void ApplyOverlay(NativeSession session, int channel)
+    {
+        OverlaySpec o = _overlays[channel];
+        int index = o.Source is null ? -1 : _specs.IndexOf(o.Source);
+        uint id = index < 0 ? 0 : _inputs[index].Id;
+        session.SetOverlay(channel, o.Layer with { InputId = id });
+        if (id != 0 && o.Visible) session.ShowOverlay(channel, true, 0);
     }
 
     // ---- outputs: recording and streaming (M5) ----
@@ -667,6 +787,22 @@ public sealed class ProductionService : IDisposable
 
         /// <summary>Plug-in inserts (null = empty slot).</summary>
         public InsertSpec?[] Inserts { get; } = new InsertSpec?[NativeSession.AudioInsertSlots];
+
+        /// <summary>Graphics: scene JSON.</summary>
+        public string? Scene { get; set; }
+
+        /// <summary>Graphics: field values.</summary>
+        public Dictionary<string, string> Fields { get; } = [];
+
+        /// <summary>Graphics: last timer setting (restored paused after a rebuild).</summary>
+        public (GraphicsTimerMode Mode, TimeSpan? Value)? Timer { get; set; }
+    }
+
+    private sealed class OverlaySpec
+    {
+        public InputSpec? Source { get; set; }
+        public LayerSettings Layer { get; set; } = new() { InputId = 0 };
+        public bool Visible { get; set; }
     }
 
     private sealed record InsertSpec(Vst3Plugin Plugin)

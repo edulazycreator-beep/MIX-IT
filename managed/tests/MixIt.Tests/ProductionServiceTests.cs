@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using MixIt.Core.Engine;
+using MixIt.Core.Graphics;
 using MixIt.Core.Production;
 using MixIt.Interop;
 using Xunit;
@@ -212,6 +213,45 @@ public class ProductionServiceTests
             Assert.Single(service.Outputs);
             service.RemoveOutput(program.Id);
             Assert.Empty(service.Outputs);
+        }
+    }
+
+    [Fact]
+    public async Task GraphicsOnAnOverlayChannelSurviveARebuild()
+    {
+        (EngineHost host, ProductionService service) = Create();
+        using (host)
+        using (service)
+        {
+            ProductionInput cam = service.AddTestSignal();
+            GraphicsTemplate lt = GraphicsTemplates.LowerThird();
+            ProductionInput g = service.AddGraphics("Lower third", lt.SceneJson, lt.Fields);
+            Assert.Equal(ProductionInputKind.Graphics, g.Kind);
+            service.SetGraphicsField(g.Id, "name", "Siti Rahma");
+            service.SetOverlay(0, g.Id);
+            service.ShowOverlay(0, true);
+            Assert.Throws<ArgumentException>(() => service.SetGraphicsField(cam.Id, "name", "x"));
+
+            service.SetFormat(ProductionFormat.Standard.First(f => f.Width == 1280));  // rebuild
+            uint gid = service.Inputs[1].Id;
+            Assert.Equal("Siti Rahma", service.GetGraphicsFields(gid)["name"]);
+            (uint? onChannel, _, OverlayState state) = service.GetOverlay(0);
+            Assert.Equal(gid, onChannel);
+            Assert.True(state.Visible);
+            Assert.Equal(1.0f, state.Level);
+
+            service.SetGraphicsTimer(gid, GraphicsTimerMode.Countdown, TimeSpan.FromSeconds(30), false);
+            await service.StartAsync();
+            await Task.Delay(300);
+            GraphicsInfo info = service.GetGraphicsInfo(gid);
+            Assert.True(info.FramesRendered >= 1);
+            Assert.Equal("", info.Warnings);
+            Assert.Equal(TimeSpan.FromSeconds(30), info.Timer);
+            await service.StopAsync();
+
+            service.RemoveInput(gid);  // the overlay channel empties with it
+            Assert.Null(service.GetOverlay(0).InputId);
+            foreach (GraphicsTemplate t in GraphicsTemplates.All) Assert.False(string.IsNullOrEmpty(t.SceneJson));
         }
     }
 

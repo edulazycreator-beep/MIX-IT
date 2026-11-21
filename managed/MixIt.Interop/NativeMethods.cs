@@ -195,6 +195,38 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_overlay(SessionHandle session, uint channel, MixitLayerConfig* layer);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_show_overlay(SessionHandle session, uint channel, int visible, uint fadeFrames);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_overlay(SessionHandle session, uint channel, MixitOverlayInfo* info);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_add_graphics_source(SessionHandle session, MixitGraphicsSourceConfig* config, uint* inputId);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_graphics_scene(SessionHandle session, uint inputId, byte* sceneJson);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_graphics_field(SessionHandle session, uint inputId, byte* name, byte* value);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_set_graphics_timer(SessionHandle session, uint inputId, int mode, long valueMs, int running);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial NativeResult mixit_session_get_graphics_info(SessionHandle session, uint inputId, MixitGraphicsInfo* info);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial NativeResult mixit_session_add_output(SessionHandle session, MixitOutputConfig* config, uint* id);
 
     [LibraryImport(LibraryName)]

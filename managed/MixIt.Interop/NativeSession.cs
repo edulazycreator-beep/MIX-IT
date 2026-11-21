@@ -144,6 +144,17 @@ public sealed record LayerSettings
     public KeySettings Key { get; init; } = KeySettings.None;
 }
 
+/// <summary>An overlay channel: its input (0 = empty), target visibility and current fade level.</summary>
+public readonly record struct OverlayState(uint InputId, bool Visible, float Level);
+
+public enum GraphicsTimerMode
+{
+    Stopwatch = 1,
+    Countdown = 2,
+}
+
+public sealed record GraphicsInfo(GraphicsTimerMode TimerMode, TimeSpan Timer, bool TimerRunning, ulong FramesRendered, string Warnings);
+
 public enum KeyType
 {
     None = 0,
@@ -321,8 +332,14 @@ public sealed unsafe class NativeSession : IDisposable
     /// <summary>Sets overlay layer <paramref name="index"/> (0..7) of a bus.</summary>
     public void SetLayer(VideoBus bus, uint index, LayerSettings layer)
     {
+        MixitLayerConfig c = ToNative(layer);
+        Check(NativeMethods.mixit_session_set_layer(_handle, (int)bus, index, &c), "mixit_session_set_layer");
+    }
+
+    private static MixitLayerConfig ToNative(LayerSettings layer)
+    {
         ArgumentNullException.ThrowIfNull(layer);
-        var c = new MixitLayerConfig
+        return new MixitLayerConfig
         {
             StructSize = (uint)sizeof(MixitLayerConfig),
             InputId = layer.InputId,
@@ -344,7 +361,99 @@ public sealed unsafe class NativeSession : IDisposable
             LumaSoftness = layer.Key.Softness,
             KeyFlags = layer.Key.Invert ? 1u : 0u,
         };
-        Check(NativeMethods.mixit_session_set_layer(_handle, (int)bus, index, &c), "mixit_session_set_layer");
+    }
+
+    // ---- overlay channels (M6) ----
+
+    /// <summary>Overlay channels (downstream layers on top of the program, kept across cuts).</summary>
+    public const int OverlayChannels = 4;
+
+    /// <summary>Sets what an overlay channel shows (InputId 0 empties it).</summary>
+    public void SetOverlay(int channel, LayerSettings layer)
+    {
+        MixitLayerConfig c = ToNative(layer);
+        Check(NativeMethods.mixit_session_set_overlay(_handle, (uint)channel, &c), "mixit_session_set_overlay");
+    }
+
+    /// <summary>Shows or hides an overlay channel with a fade over <paramref name="fadeFrames"/> output frames.</summary>
+    public void ShowOverlay(int channel, bool visible, int fadeFrames = 0) =>
+        Check(NativeMethods.mixit_session_show_overlay(_handle, (uint)channel, visible ? 1 : 0, (uint)Math.Max(0, fadeFrames)),
+            "mixit_session_show_overlay");
+
+    public OverlayState GetOverlay(int channel)
+    {
+        MixitOverlayInfo i = default;
+        i.StructSize = (uint)sizeof(MixitOverlayInfo);
+        Check(NativeMethods.mixit_session_get_overlay(_handle, (uint)channel, &i), "mixit_session_get_overlay");
+        return new OverlayState(i.InputId, i.Visible != 0, i.Level);
+    }
+
+    // ---- graphics inputs (M6) ----
+
+    /// <summary>Adds a graphics input rendering <paramref name="sceneJson"/> (only while stopped).</summary>
+    public uint AddGraphicsSource(uint width, uint height, string sceneJson)
+    {
+        ArgumentNullException.ThrowIfNull(sceneJson);
+        byte* json = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(sceneJson);
+        try
+        {
+            var c = new MixitGraphicsSourceConfig
+            {
+                StructSize = (uint)sizeof(MixitGraphicsSourceConfig), Width = width, Height = height, SceneJson = json,
+            };
+            uint id = 0;
+            Check(NativeMethods.mixit_session_add_graphics_source(_handle, &c, &id), "mixit_session_add_graphics_source");
+            return id;
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)json);
+        }
+    }
+
+    public void SetGraphicsScene(uint inputId, string sceneJson)
+    {
+        ArgumentNullException.ThrowIfNull(sceneJson);
+        byte* json = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(sceneJson);
+        try
+        {
+            Check(NativeMethods.mixit_session_set_graphics_scene(_handle, inputId, json), "mixit_session_set_graphics_scene");
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)json);
+        }
+    }
+
+    public void SetGraphicsField(uint inputId, string name, string value)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(value);
+        byte* n = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(name);
+        byte* v = (byte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(value);
+        try
+        {
+            Check(NativeMethods.mixit_session_set_graphics_field(_handle, inputId, n, v), "mixit_session_set_graphics_field");
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)n);
+            System.Runtime.InteropServices.Marshal.FreeCoTaskMem((nint)v);
+        }
+    }
+
+    /// <summary>Sets the timer; <paramref name="value"/> null keeps the current value (pause/resume).</summary>
+    public void SetGraphicsTimer(uint inputId, GraphicsTimerMode mode, TimeSpan? value, bool running) =>
+        Check(NativeMethods.mixit_session_set_graphics_timer(_handle, inputId, (int)mode,
+            value is { } v ? (long)v.TotalMilliseconds : -1, running ? 1 : 0), "mixit_session_set_graphics_timer");
+
+    public GraphicsInfo GetGraphicsInfo(uint inputId)
+    {
+        MixitGraphicsInfo i = default;
+        i.StructSize = (uint)sizeof(MixitGraphicsInfo);
+        Check(NativeMethods.mixit_session_get_graphics_info(_handle, inputId, &i), "mixit_session_get_graphics_info");
+        return new GraphicsInfo((GraphicsTimerMode)i.TimerMode, TimeSpan.FromMilliseconds(i.TimerMs), i.TimerRunning != 0,
+            i.FramesRendered, Utf8.FromNullTerminated(i.Warnings, 256));
     }
 
     /// <summary>Removes overlay layer <paramref name="index"/> of a bus.</summary>

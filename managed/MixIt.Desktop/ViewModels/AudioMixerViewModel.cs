@@ -224,6 +224,7 @@ public sealed class AudioMixerViewModel : ObservableObject
         {
             foreach (ProductionInput input in _production.Inputs)
             {
+                if (input.Kind == ProductionInputKind.Graphics) continue;  // no audio
                 try
                 {
                     Strips.Add(new StripViewModel(input, _production.GetAudioStrip(input.Id), this));
