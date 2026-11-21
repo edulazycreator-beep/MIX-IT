@@ -1,8 +1,8 @@
-# MIX IT — Native Engine API Contract (v0.5.0)
+# MIX IT — Native Engine API Contract (v0.6.0)
 
 Header: [`native/include/mixit/mixit_engine.h`](../native/include/mixit/mixit_engine.h).
 Library: `mixit_engine.dll` (Windows x64), `libmixit_engine.so` (Linux dev host).
-Exported symbols: exactly the 60 functions below (verified with `nm`/`objdump`).
+Exported symbols: exactly the 75 functions below (verified with `nm`/`objdump`).
 
 | Version | Added |
 |---|---|
@@ -10,6 +10,7 @@ Exported symbols: exactly the 60 functions below (verified with `nm`/`objdump`).
 | 0.2.0 (M2) | sessions (lifecycle steps 3–8), test-signal inputs, program frame access, media library (FFmpeg) queries |
 | 0.3.0 (M3) | media-file inputs, preview bus, cut, transitions, layers, bus frame access, compositor preference, capture devices (experimental); appended fields in `session_config`, `session_stats`, `input_stats` |
 | 0.5.0 (M5) | outputs: recording and streaming (add/remove/start/stop, stats), encoder query |
+| 0.6.0 (M6) | layer keyers (chroma/luma; `layer_config` grows to 80 bytes, 48 accepted), overlay channels, graphics inputs, multiview bus and output source, input labels, instant replay |
 | 0.4.0 (M4) | audio mixer (strips, buses, monitor, meters, loudness, bus audio read), audio devices (monitor output, audio inputs; experimental), VST3 inserts (experimental); appended audio counters in `session_stats`, `input_stats` |
 
 API 0.x requires an **exact minor match** at `mixit_engine_create`.
@@ -185,6 +186,79 @@ Appended fields keep older callers working: a 0.2-sized `mixit_session_config`
 
 **`mixit_session_add_capture_source(session, config, out_input_id)`** — only when not RUNNING. `device_id` from enumeration; `width`/`height` both 0 (= largest mode up to 1920×1080) or both set; `frame_rate_num` 0 = highest up to 60 fps. Video only; frames stamped on arrival. Device loss: last frame held, `decode_errors` counted, reopened every second (ADR-0007). `NOT_FOUND` no such device; `NOT_SUPPORTED` no usable mode / no backend.
 
+### Keys, overlay channels, graphics, multiview, replay — API 0.6 (M6, ADR-0011)
+
+**Keys.** `mixit_layer_config` gained a keyer (80 bytes; callers passing the
+0.3 size 48 get no key). Chroma: a pixel whose BT.709 CbCr is within
+`key_similarity` of `key_color` is transparent, with a `key_smoothness` soft
+edge and `key_spill` suppression of the key colour on the rest. Luma: luma
+below `luma_threshold` (above, with `MIXIT_KEY_FLAG_INVERT`) is transparent,
+`luma_softness` edge. Only the active type's fields are validated. The CPU and
+D3D11 compositors use the same formulas (compared in tests).
+
+**Overlay channels** (4, `MIXIT_OVERLAY_CHANNELS`) are drawn on top of the
+program after transitions, so graphics stay on air across cuts.
+**`mixit_session_set_overlay(session, channel, layer)`** — any time; input 0
+empties the channel. **`mixit_session_show_overlay(session, channel, visible,
+fade_frames)`** — fade over 0..600 output frames (immediate while stopped);
+`INVALID_STATE` to show an empty channel. **`mixit_session_get_overlay`** —
+input, target visibility, current level. A visible overlay counts as "on
+program" for audio-follows-video.
+
+**Graphics inputs.** **`mixit_session_add_graphics_source(session, config,
+out_id)`** (not while RUNNING), **`set_graphics_scene`**, **`set_graphics_field`**
+(name 1..64 bytes, value ≤ 4096; `time`/`timer` are reserved),
+**`set_graphics_timer(mode, value_ms or <0 = keep, running)`**,
+**`get_graphics_info`** (timer, frames rendered, last render warnings such as a
+missing font or image). The input renders only when something changed (a field,
+the scene, the clock second, the timer) and repeats its last frame otherwise.
+
+Scene JSON (≤ 1 MiB, nesting ≤ 32, ≤ 256 elements; coordinates normalized
+0..1 to the frame; colours `#RRGGBB` or `#AARRGGBB`):
+
+```json
+{"elements": [
+  {"type": "rect",  "x": 0.05, "y": 0.78, "w": 0.5, "h": 0.12, "color": "#D0101820", "radius": 0.01},
+  {"type": "text",  "x": 0.07, "y": 0.79, "w": 0.46, "h": 0.06, "text": "{name}", "size": 0.05,
+   "color": "#FFFFFF", "bold": true, "align": "left", "valign": "middle", "shadow": true, "fit": true,
+   "font": "C:/Windows/Fonts/arial.ttf"},
+  {"type": "image", "x": 0.85, "y": 0.05, "w": 0.1, "h": 0.1, "path": "C:/logo.png", "fit": "contain"}
+]}
+```
+
+Text `size` is a fraction of the frame height; `align` left/center/right,
+`valign` top/middle/bottom; `fit` shrinks a too-long line to the box; `font`
+empty = embedded DejaVu Sans (Bold with `bold`). `{field}` placeholders show
+field values, `{time}` the local time `HH:MM:SS`, `{timer}` the stopwatch or
+countdown (`M:SS`, `H:MM:SS` from one hour). Images: PNG/JPEG/BMP/… through
+FFmpeg, local files only, ≤ 16384², `fit` contain (keep aspect) or stretch.
+No complex-script shaping (Arabic, Indic) yet; unknown keys are ignored.
+
+**Multiview.** `mixit_session_copy_bus_frame(MIXIT_BUS_MULTIVIEW)` gives the
+operator multiview at the session size: preview (green border) and program
+(red) on top, the first 8 video inputs below with tally borders and labels.
+It is rendered only while it was read in the last second or an output records
+it. **`mixit_session_set_input_label(session, input_id, label)`** — ≤ 128
+bytes UTF-8, "" = "Input N". An output with `source_input =
+MIXIT_OUTPUT_SOURCE_MULTIVIEW` (0xFFFF) records/streams the multiview with the
+program audio.
+
+**Instant replay** (video only). **`mixit_session_enable_replay(session,
+input_id, seconds, quality)`** — any time; 5..600 s keeps that input's last
+frames as JPEG (FFmpeg MJPEG, `quality` = qscale 2 best .. 31) in memory, stamped
+with the tick time they were on air (master clock); 0 disables. Feeding never
+blocks the tick: frames the encoder cannot take are counted (`dropped`).
+**`mixit_session_get_replay_buffer`** — oldest/newest time, frames, bytes,
+dropped, size (`INVALID_STATE` when disabled).
+**`mixit_session_add_replay_source(session, source_input_id, out_id)`** — not
+while RUNNING: an input playing that buffer (a replay of a replay is
+refused). **`mixit_session_replay_play(session, replay_id, from_ns, speed,
+paused)`** — plays from buffer time `from_ns` (before the oldest frame = the
+oldest) at 0.1..2× (slow motion repeats frames, no interpolation), holding the
+newest frame when it catches up. **`mixit_session_replay_control(…, speed ≤ 0
+= keep, paused < 0 = keep)`**, **`mixit_session_get_replay_state`** (active,
+paused, speed, position). Memory: about 3 MB per second at 1080p30, quality 4.
+
 ### Outputs: recording and streaming — API 0.5 (M5, ADR-0010)
 
 An output encodes the program — or one input (ISO: the input's own size and
@@ -286,7 +360,12 @@ Plug-ins run **inside the engine process**: a faulty plug-in can crash the engin
 | `mixit_session_stats` | 168 | `ticks` 16, `video_latency_max_ns` 88, `preview_input_id` 96, `transitions_completed` 112, `compositor_fallbacks` 128, `audio_blocks` 136 (0.2/0.3 sizes 96/136 accepted) |
 | `mixit_input_stats` | 144 | `frames_produced` 8, `av_offset_max_abs_ns` 104, `decode_errors` 112, `audio_underrun_frames` 128 (0.2/0.3 sizes 112/128 accepted) |
 | `mixit_file_source_config` | 16 | `path` 8 |
-| `mixit_layer_config` | 48 | `opacity` 40 |
+| `mixit_layer_config` | 80 | `opacity` 40, `key_type` 48, `key_flags` 76 (0.3 size 48 accepted) |
+| `mixit_overlay_info` | 16 | `level` 12 |
+| `mixit_graphics_source_config` | 24 | `scene_json` 16 |
+| `mixit_graphics_info` | 288 | `timer_ms` 8, `frames_rendered` 24, `warnings` 32 |
+| `mixit_replay_buffer_info` | 56 | `oldest_ns` 16, `dropped` 48 |
+| `mixit_replay_state` | 24 | `speed` 12, `position_ns` 16 |
 | `mixit_capture_device_info` | 648 | `name` 8, `id` 136 |
 | `mixit_capture_source_config` | 32 | `device_id` 8 |
 | `mixit_video_frame_info` | 56 | `tick_pts_ns` 24, `tick_index` 48 |

@@ -269,3 +269,45 @@ extra frames and input pools 3 for encoder queues.
 
 **Not yet.** GPU-resident frames to hardware encoders, HEVC/AV1, adaptive
 bitrate, audio-only and multi-track recording, RTMPS certificate options.
+
+## 12. Graphics and production tools (M6, implemented)
+
+Design decisions: ADR-0011.
+
+**Keyers** run inside the compositor per layer (CPU reference and D3D11 pixel
+shader, same formulas): chroma = BT.709 CbCr distance to the key colour with a
+smoothstep edge and spill suppression; luma = smoothstep on Y. **Overlay
+channels** are a second layer list drawn after the transition mix; their fade
+levels advance in the tick thread by elapsed ticks (so a fade keeps its length
+after skipped ticks) and their inputs count for audio-follows-video.
+
+**Graphics inputs** (`GraphicsSource`) are ordinary inputs with their own
+thread: they parse a JSON scene (own parser, bounded size/depth), render on the
+CPU with FreeType into a transparent BGRA frame only when a field, the scene,
+the second (`{time}`) or the timer changed, and push it; the session frame
+sync repeats the last frame. Images are decoded once with FFmpeg.
+
+**Multiview** is a third bus rendered by the tick thread after program and
+preview, only while requested (a read in the last second, or an output with
+source 0xFFFF): it scales preview, program and up to 8 inputs into a grid with
+the CPU renderer, draws tally borders and cached label bitmaps (FreeType,
+re-rendered when a label changes). The multiview output takes program audio
+from the mixer.
+
+**Instant replay.** Each input may own a `ReplayBuffer` (published to the
+tick thread through an atomic pointer; replacing it waits for the feed to be
+quiescent, like outputs). The tick thread hands the input's frame of each tick
+with the tick time to `feed`, which `try_lock`s a 3-deep queue and otherwise
+counts a drop. An encoder thread (`mixit-replay`) converts BGRA → full-range
+4:2:0, encodes MJPEG and appends the JPEG to a deque trimmed to the configured
+span. A `ReplaySource` input (`mixit-replay-out`) computes its position from
+an anchor (position, monotonic time, speed, pause), picks the newest frame at
+or before it, decodes only when that frame changes and pushes it with the
+current time. Buffers are shared (`shared_ptr`) between the input that
+records and the replay inputs, so disabling replay never frees frames that are
+being played.
+
+**Not yet.** HTML/browser graphics (renderer ADR pending), animated
+transitions of graphics, multiview layouts and external display outputs,
+replay audio, playlists and highlight clips, frame interpolation, 3D virtual
+sets.

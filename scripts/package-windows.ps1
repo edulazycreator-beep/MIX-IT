@@ -51,6 +51,11 @@ Copy-Item (Join-Path $root 'docs/THIRD_PARTY_LICENSES.md') $out -Force
 # MIT: the VST3 interface code compiled into mixit_engine.dll needs its licence text.
 $vst3Licence = Join-Path $root 'build/windows-msvc/_deps/vst3/pluginterfaces/LICENSE.txt'
 if (Test-Path $vst3Licence) { Copy-Item $vst3Licence (Join-Path $out 'VST3_PLUGINTERFACES_LICENSE.txt') -Force }
+# FreeType (FTL, attribution required) and the embedded DejaVu fonts (licence text must accompany copies).
+$ftLicence = Join-Path $root 'build/windows-msvc/_deps/freetype-src/docs/FTL.TXT'
+if (Test-Path $ftLicence) { Copy-Item $ftLicence (Join-Path $out 'FREETYPE_LICENSE.txt') -Force }
+$dejavuLicence = Join-Path $root 'build/windows-msvc/_deps/dejavu/dejavu-fonts-ttf-2.37/LICENSE'
+if (Test-Path $dejavuLicence) { Copy-Item $dejavuLicence (Join-Path $out 'DEJAVU_FONTS_LICENSE.txt') -Force }
 
 $version = (Select-String -Path (Join-Path $root 'native/include/mixit/mixit_engine.h') -Pattern 'MIXIT_API_VERSION_(MAJOR|MINOR|PATCH) (\d+)').Matches |
     ForEach-Object { $_.Groups[2].Value }

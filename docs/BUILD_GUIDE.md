@@ -125,6 +125,9 @@ release build.
 | `MIXIT_REQUIRE_LGPL_FFMPEG` | ON on Windows, OFF elsewhere | reject non-LGPL FFmpeg at runtime |
 | `FFMPEG_ROOT` | env `FFMPEG_ROOT` | FFmpeg shared build (include/, lib/, bin/) |
 | `MIXIT_ENABLE_VST3` | ON | VST3 plug-in host (ADR-0008). Fetches the pinned `vst3_pluginterfaces` (MIT) with git at configure time; OFF builds without plug-ins |
+| `MIXIT_ENABLE_GRAPHICS` | ON | graphics inputs and multiview labels (ADR-0011). Fetches the pinned FreeType (git) and the DejaVu fonts zip (hash-checked) at configure time; OFF builds without graphics (`NOT_SUPPORTED`) |
+| `MIXIT_FREETYPE_DIR` | empty | offline: path of an existing FreeType checkout of the pinned commit (no download) |
+| `MIXIT_DEJAVU_ZIP` | empty | offline: path of `dejavu-fonts-ttf-2.37.zip` (hash still checked) |
 | `MIXIT_VST3_INTERFACES_DIR` | empty | offline: path of an existing checkout of the pinned commit; the folder itself must be named `pluginterfaces` (no download) |
 
 With tests enabled, the build also produces a small VST3 test plug-in at

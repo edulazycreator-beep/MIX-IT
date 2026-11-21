@@ -1,6 +1,7 @@
 // Preview/program buses, cuts, transitions and layers through the C ABI.
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <optional>
 #include <thread>

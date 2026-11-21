@@ -80,11 +80,15 @@ Status: PLANNED · IN_PROGRESS · EXPERIMENTAL · IMPLEMENTED · TESTED · PRODU
 
 | Feature | Status | Milestone |
 |---|---|---|
-| Text, PNG overlays, lower thirds, titles, clocks, countdowns, scoreboards | PLANNED | M6 |
-| Animated and HTML graphics, template editor | PLANNED | M6 |
-| Virtual studio (2D; 3D architecture only) | PLANNED | M6 |
-| Instant replay, slow motion, playlists | PLANNED | M6 |
-| Multiview, external displays, clean feed, NDI output | PLANNED | M6 |
+| Text, PNG/JPEG overlays, lower thirds, titles, clocks, countdowns, scoreboards (JSON scenes, live fields, timers) | TESTED (Linux + Windows CI) | M6 |
+| Chroma and luma key per layer (CPU + D3D11) | TESTED (CPU; D3D11 on WARP in CI) | M6 |
+| Four overlay channels (downstream keys) with fades, kept across cuts | TESTED | M6 |
+| Animated and HTML graphics, template editor | PLANNED (HTML renderer decision pending) | later |
+| Virtual studio 2D: keyed presenter on an overlay channel over a background, placement presets | IMPLEMENTED (basic; no 3D sets, no camera tracking) | M6 |
+| Instant replay with slow motion (0.1–2×, mark in, pause), video only | TESTED (Linux + Windows CI) | M6 |
+| Replay audio, playlists, highlight clips | PLANNED | later |
+| Multiview (preview, program, 8 inputs, labels, tally) on screen and as a recording/stream source | TESTED | M6 |
+| External display outputs, clean feed, NDI output | PLANNED | M8 / vendor SDK |
 | Macros, scheduled/triggered automation, remote control API | PLANNED | M7 |
 | PTZ, tally | PLANNED | M7 |
 | Projects (SQLite + JSON import/export, schema migration) | PLANNED | M2/M8 |
