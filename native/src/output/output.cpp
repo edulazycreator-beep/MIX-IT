@@ -449,6 +449,8 @@ private:
         avformat_free_context(oc_);
         oc_ = nullptr;
         av_bsf_free(&bsf_);
+        for (Item& a : pending_audio_) av_packet_free(&a.pkt);
+        pending_audio_.clear();
         connected_.store(false);  // only now: the trailer must not be interrupted by a stop
     }
 
@@ -457,7 +459,18 @@ private:
         AVPacket* pkt = it.pkt;
         const int stream = it.stream;
         if (!started_) {
-            if (stream != 0 || (pkt->flags & AV_PKT_FLAG_KEY) == 0) {  // every file/connection starts at a keyframe
+            if (stream == 1) {
+                // Audio can come out of the encoders before the first video
+                // packet (video encoders with latency): keep it, it may
+                // belong after the keyframe that starts the file.
+                pending_audio_.push_back(it);
+                if (pending_audio_.size() > 128) {
+                    av_packet_free(&pending_audio_.front().pkt);
+                    pending_audio_.pop_front();
+                }
+                return true;
+            }
+            if ((pkt->flags & AV_PKT_FLAG_KEY) == 0) {  // every file/connection starts at a keyframe
                 av_packet_free(&pkt);
                 return true;
             }
@@ -467,7 +480,20 @@ private:
             offset_[1] = av_rescale_q_rnd(offset_ns_, kNs, audio_tb_,
                                           static_cast<AVRounding>(AV_ROUND_UP | AV_ROUND_PASS_MINMAX));
             segment_start_ns_ = it.ns;
+            if (!write_one(it)) return false;
+            while (!pending_audio_.empty()) {  // now on the file's timeline (earlier ones are dropped there)
+                Item a = pending_audio_.front();
+                pending_audio_.pop_front();
+                if (!write_one(a)) return false;
+            }
+            return true;
         }
+        return write_one(it);
+    }
+
+    bool write_one(Item& it) {
+        AVPacket* pkt = it.pkt;
+        const int stream = it.stream;
         if (stream == 1 && audio_par_ == nullptr) {
             av_packet_free(&pkt);
             return true;
@@ -684,6 +710,7 @@ private:
     AVFormatContext* oc_ = nullptr;
     AVBSFContext* bsf_ = nullptr;
     bool started_ = false;
+    std::deque<Item> pending_audio_;  // audio before the first keyframe of a file/connection
     std::int64_t offset_ns_ = 0;
     std::int64_t offset_[2]{0, 0};
     std::int64_t segment_start_ns_ = 0;
