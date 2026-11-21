@@ -4,6 +4,9 @@
     "projects": [
       "managed/MixIt.Interop/MixIt.Interop.csproj",
       "managed/MixIt.Core/MixIt.Core.csproj",
+      "managed/MixIt.Remote/MixIt.Remote.csproj",
+      "managed/MixIt.SDK/MixIt.SDK.csproj",
+      "managed/MixIt.Protocol/MixIt.Protocol.csproj",
       "managed/MixIt.Probe/MixIt.Probe.csproj",
       "managed/tests/MixIt.Tests/MixIt.Tests.csproj"
     ]

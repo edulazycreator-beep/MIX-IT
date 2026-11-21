@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    MixIt.Protocol — the documented contracts of the remote-control API and of
+    extensions (commands, results, tally, state, events). Base class library
+    only: remote clients and extensions can reference it without the engine.
+  -->
+  <PropertyGroup>
+    <RootNamespace>MixIt.Protocol</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Self-describing members (enum values, factory helpers) are exempt. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+</Project>

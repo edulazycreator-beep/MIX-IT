@@ -17,7 +17,7 @@ public sealed class MainViewModel : ObservableObject
     private bool _engineHealthy;
 
     public MainViewModel(EngineHost host, DiagnosticsViewModel diagnostics, ProductionViewModel production,
-        AudioMixerViewModel audioMixer, OutputsViewModel outputs, GraphicsViewModel graphics, ReplayViewModel replay)
+        AudioMixerViewModel audioMixer, OutputsViewModel outputs, GraphicsViewModel graphics, ReplayViewModel replay, ControlViewModel control)
     {
         _host = host;
         Diagnostics = diagnostics;
@@ -26,6 +26,7 @@ public sealed class MainViewModel : ObservableObject
         Outputs = outputs;
         Graphics = graphics;
         Replay = replay;
+        Control = control;
         Sections =
         [
             new("Production Studio", "Available (M3)", true),
@@ -35,7 +36,7 @@ public sealed class MainViewModel : ObservableObject
             new("Graphics Studio", "Available — titles, lower thirds, clock, scoreboard, overlay channels, keys (M6)", true),
             new("Replay & Multiview", "Available — multiview, instant replay with slow motion (M6)", true),
             new("Virtual Studio", "Basic — in Graphics Studio: a keyed camera (green/blue screen) placed on an overlay channel over a background input. No 3D sets or camera tracking", false),
-            new("Automation", "Planned — Milestone 7", false),
+            new("Automation & Control", "Available — macros, automation, remote control API, tally, PTZ, extensions (M7)", true),
             new("Hardware Diagnostics", "Available", true),
             new("Settings", "Planned — Milestone 8", false),
             new("License", "Planned — Milestone 9", false),
@@ -59,6 +60,8 @@ public sealed class MainViewModel : ObservableObject
 
     public ReplayViewModel Replay { get; }
 
+    public ControlViewModel Control { get; }
+
     public SectionItem SelectedSection
     {
         get => _selectedSection;
@@ -71,12 +74,14 @@ public sealed class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(ShowOutputs));
             OnPropertyChanged(nameof(ShowGraphics));
             OnPropertyChanged(nameof(ShowReplay));
+            OnPropertyChanged(nameof(ShowControl));
             OnPropertyChanged(nameof(ShowPlaceholder));
             Production.IsActive = ShowProduction;  // monitors and meters poll only while visible
             AudioMixer.IsActive = ShowAudioMixer;
             Outputs.IsActive = ShowOutputs;
             Graphics.IsActive = ShowGraphics;
             Replay.IsActive = ShowReplay;
+            Control.IsActive = ShowControl;
         }
     }
 
@@ -92,7 +97,9 @@ public sealed class MainViewModel : ObservableObject
 
     public bool ShowReplay => SelectedSection.Title == "Replay & Multiview";
 
-    public bool ShowPlaceholder => !ShowDiagnostics && !ShowProduction && !ShowAudioMixer && !ShowOutputs && !ShowGraphics && !ShowReplay;
+    public bool ShowControl => SelectedSection.Title == "Automation & Control";
+
+    public bool ShowPlaceholder => !ShowDiagnostics && !ShowProduction && !ShowAudioMixer && !ShowOutputs && !ShowGraphics && !ShowReplay && !ShowControl;
 
     public string EngineStatus
     {

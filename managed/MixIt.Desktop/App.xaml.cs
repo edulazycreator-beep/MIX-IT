@@ -3,10 +3,13 @@ using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MixIt.Core.Control;
 using MixIt.Core.Engine;
 using MixIt.Core.Production;
+using MixIt.Desktop.Services;
 using MixIt.Desktop.ViewModels;
 using MixIt.Interop;
+using MixIt.Remote;
 
 namespace MixIt.Desktop;
 
@@ -37,6 +40,29 @@ public partial class App : Application
         services.AddSingleton<OutputsViewModel>();
         services.AddSingleton<GraphicsViewModel>();
         services.AddSingleton<ReplayViewModel>();
+        // M7 control stack (commands run on this UI thread, the owner of ProductionService).
+        bool selfTest = e.Args.Length == 2 && e.Args[0] == "--self-test";
+        services.AddSingleton<IProductionDispatcher, WpfProductionDispatcher>();
+        services.AddSingleton<CommandService>();
+        services.AddSingleton<MacroRunner>();
+        services.AddSingleton(sp => new AutomationScheduler(sp.GetRequiredService<MacroRunner>(), sp.GetRequiredService<ILogger<AutomationScheduler>>()));
+        services.AddSingleton<TallyService>();
+        services.AddSingleton<PtzService>();
+        services.AddSingleton<ExtensionManager>();
+        services.AddSingleton(sp => new ControlSettingsStore(
+            selfTest ? Path.Combine(Path.GetTempPath(), "mixit-selftest-control.json") : ControlSettingsStore.DefaultPath(),
+            sp.GetRequiredService<ILogger<ControlSettingsStore>>()));
+        services.AddSingleton(sp =>
+        {
+            ProductionService production = sp.GetRequiredService<ProductionService>();
+            TallyService tally = sp.GetRequiredService<TallyService>();
+            var dispatcher = sp.GetRequiredService<IProductionDispatcher>();
+            return new RemoteControlServer(sp.GetRequiredService<CommandService>(), sp.GetRequiredService<MacroRunner>(), tally,
+                () => dispatcher.InvokeAsync(() => Task.FromResult(ProductionCommands.Snapshot(production, tally.Current))),
+                sp.GetRequiredService<ILogger<RemoteControlServer>>());
+        });
+        services.AddSingleton<ControlHost>();
+        services.AddSingleton<ControlViewModel>();
         services.AddSingleton<DiagnosticsViewModel>();
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<MainWindow>();
@@ -57,6 +83,9 @@ public partial class App : Application
             args.Handled = true;
         };
 
+        // Control settings first: the Automation & Control view model reads them.
+        ControlHost control = _services.GetRequiredService<ControlHost>();
+        Task controlStart = control.StartAsync();
         var window = _services.GetRequiredService<MainWindow>();
         window.Show();
         Task init = _services.GetRequiredService<MainViewModel>().InitializeAsync();
@@ -68,7 +97,7 @@ public partial class App : Application
             _ = SelfTest.RunProductionAsync(init, _services.GetRequiredService<ProductionViewModel>(),
                 _services.GetRequiredService<AudioMixerViewModel>(), _services.GetRequiredService<OutputsViewModel>(),
                 _services.GetRequiredService<GraphicsViewModel>(), _services.GetRequiredService<ReplayViewModel>(),
-                _services.GetRequiredService<ProductionService>(), _services.GetRequiredService<ILogger<App>>(), this);
+                control, controlStart, _services.GetRequiredService<ProductionService>(), _services.GetRequiredService<ILogger<App>>(), this);
         }
     }
 
@@ -76,6 +105,18 @@ public partial class App : Application
     {
         // Disposing the provider disposes EngineHost, which shuts the engine
         // down and flushes its log before the process exits.
+        if (_services?.GetService<ControlHost>() is { } control)
+        {
+            // Stops the remote server and macros; never lets a failure block shutdown.
+            try
+            {
+                control.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));
+            }
+            catch (AggregateException ex)
+            {
+                _services.GetRequiredService<ILogger<App>>().LogWarning(ex, "Control shutdown");
+            }
+        }
         _services?.Dispose();
         base.OnExit(e);
     }

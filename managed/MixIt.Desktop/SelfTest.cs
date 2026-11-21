@@ -1,7 +1,13 @@
 using System.IO;
 using System.Windows;
 using Microsoft.Extensions.Logging;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Net.Sockets;
+using MixIt.Core.Control;
 using MixIt.Core.Production;
+using MixIt.Desktop.Services;
 using MixIt.Desktop.ViewModels;
 using MixIt.Interop;
 
@@ -16,8 +22,8 @@ namespace MixIt.Desktop;
 internal static class SelfTest
 {
     public static async Task RunProductionAsync(Task engineStart, ProductionViewModel vm, AudioMixerViewModel mixer,
-        OutputsViewModel outputs, GraphicsViewModel graphics, ReplayViewModel replay, ProductionService production, ILogger logger,
-        Application app)
+        OutputsViewModel outputs, GraphicsViewModel graphics, ReplayViewModel replay, ControlHost control, Task controlStart,
+        ProductionService production, ILogger logger, Application app)
     {
         var failures = new List<string>();
         try
@@ -171,6 +177,42 @@ internal static class SelfTest
             }
             if (replay.Error is not null) failures.Add($"replay error shown: {replay.Error}");
             replay.IsActive = false;
+
+            // Automation & Control: a macro switches the program; the remote API
+            // answers with the token only and runs a command; tally follows.
+            await controlStart;
+            control.Macros.Save(Macro.Parse("SelfTest", "SetPreview input=2\nCut"));
+            await vm.ToggleProductionAsync();
+            await Task.Delay(300);
+            MacroRun run = await control.Macros.RunAsync("SelfTest");
+            if (!run.Ok) failures.Add($"macro failed: {run.Error}");
+            else if (production.GetStatistics()?.ProgramInputId != production.Inputs[1].Id) failures.Add("macro did not put input 2 on program");
+            int port;
+            using (var probe = new TcpListener(IPAddress.Loopback, 0))
+            {
+                probe.Start();
+                port = ((IPEndPoint)probe.LocalEndpoint).Port;
+                probe.Stop();
+            }
+            string token = MixIt.Remote.RemoteControlServer.NewToken();
+            await control.Remote.StartAsync(new RemoteSettings { Enabled = true, Port = port, Token = token });
+            using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(10) })
+            {
+                HttpStatusCode denied = (await http.GetAsync("/api/v1/state")).StatusCode;
+                if (denied != HttpStatusCode.Unauthorized) failures.Add($"remote API without token answered {denied}");
+                http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                string state = await http.GetStringAsync("/api/v1/state");
+                if (!state.Contains("\"running\":true", StringComparison.Ordinal)) failures.Add("remote state does not show the running production");
+                HttpResponseMessage cut = await http.PostAsync("/api/v1/commands/Cut", new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+                if (!cut.IsSuccessStatusCode) failures.Add($"remote Cut answered {cut.StatusCode}");
+            }
+            await Task.Delay(300);  // the tally timer refreshes 10x/s
+            uint program = production.GetStatistics()?.ProgramInputId ?? 0;
+            if (!control.Tally.Current.Any(t => t.InputId == program && t.Program)) failures.Add("tally does not show the program input");
+            logger.LogInformation("Self-test control: macro {Steps} steps, remote port {Port}, {Commands} commands, tally {Tally}",
+                run.StepsRun, port, control.Commands.Commands.Count, string.Join(",", control.Tally.Current.Select(t => t.Program ? "P" : t.Preview ? "V" : "-")));
+            await control.Remote.StopAsync();
+            await vm.ToggleProductionAsync();
 
             logger.LogInformation(
                 "Self-test production details: monitors {Program}/{Preview} frames, ticks {Ticks}, late {Late}, composited {Composited}, compositor {Compositor}",

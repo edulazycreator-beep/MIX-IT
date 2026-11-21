@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\MixIt.Core\MixIt.Core.csproj" />
+    <ProjectReference Include="..\..\MixIt.Remote\MixIt.Remote.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- Lets tests find artefacts built next to the engine (e.g. the VST3 test plug-in). -->
