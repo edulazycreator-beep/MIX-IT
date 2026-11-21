@@ -134,7 +134,7 @@ commercial release.
 | SRT (libsrt) (M5) | SRT transport | MPL-2.0 | File-level copyleft; fine when dynamically linked and modifications to its files are published. |
 | SQLite (M2/M8) | project store | Public domain | ✅ (via Microsoft.Data.Sqlite, MIT + SQLitePCLRaw, Apache-2.0). |
 | OpenSSL / Schannel (M5) | RTMPS TLS | Apache-2.0 / OS | Prefer the OS TLS stack (Schannel) where FFmpeg supports it, to inherit OS certificate validation. |
-| HTML graphics engine (M6) | browser sources | CEF (BSD) or WebView2 (MS licence) | Decision deferred to an M6 ADR: off-screen GPU rendering support is the deciding factor. |
+| HTML graphics engine (after M6) | browser sources | CEF (BSD) or WebView2 (MS licence) | Deferred (ADR-0011): off-screen GPU rendering support is the deciding factor. M6 graphics use FreeType (FTL) + embedded DejaVu fonts. |
 
 ---
 
@@ -238,3 +238,4 @@ Details and raw results: [TEST_REPORT.md](TEST_REPORT.md).
 - [ADR-0008](adr/0008-vst3-in-process-host.md) VST3 effects hosted in the engine process (first version; out-of-process host planned)
 - [ADR-0009](adr/0009-audio-engine-timeline-and-device-clock-bridge.md) Audio engine on the session sample timeline, drift bridge to device clocks
 - [ADR-0010](adr/0010-outputs-shared-encoders-isolated-destinations.md) Outputs: shared encoders, isolated destinations, timeline timestamps
+- [ADR-0011](adr/0011-graphics-keys-multiview-replay.md) Graphics as inputs (FreeType, JSON scenes), layer keyers, overlay channels, multiview bus, in-memory JPEG replay

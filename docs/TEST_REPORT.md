@@ -1,5 +1,36 @@
 # MIX IT — Test Report
 
+## Run: Milestone 6 (graphics and production tools) — 2026-11-21
+
+### GitHub Actions
+
+| Run (commit) | Result |
+|---|---|
+| 44851831773 (2c9e865, M6b) | ❌ Windows self-test: "overlay 1 not on air" — a WPF ComboBox pushed a null selection into the overlay channel when the input list was rebuilt, emptying the channel. Fixed in 8ab3c64. |
+| 44854020148 (8ab3c64, M6c) | ❌ Windows: `test_buses.cpp` missed `#include <array>` (MSVC). |
+| 44854704962 (d315f03) | ✅ Windows: native **154/154** (D3D11 keyer comparison on WARP passed), WPF 0 warnings, xUnit **46/46**, self-test PASS (recording, lower third on an overlay, multiview monitor, replay at 50 %) · ❌ Linux TSan: data race in the replay encoder (read the frame size after releasing the frame; a buffer kept by a replay input could still hold frames of a removed input's pool). Fixed in e41d496. |
+| 44856343384 (e41d496) | ✅ Windows: native 154/154, WPF, xUnit 46/46, self-test PASS · ✅ Linux: Debug, ASan+UBSan, TSan, Release, MinGW cross-check |
+
+### Local (2-core Linux)
+
+| Check | Result |
+|---|---|
+| Native against the pinned LGPL FFmpeg 9.0.2 | ✅ 153/153 + 1 skipped (D3D11, Windows only) |
+| ASan+UBSan (system FFmpeg 6.1) | ✅ 153/153 |
+| TSan (`-j2`) | ✅ replay/outputs/buses/graphics suites, replay test ×3 after the fix · full run: 152/153 — `Session.ScalesInputsToProgramSizeAndCutsBetweenInputs` failed once on timing under load and passed 3/3 when rerun (M3 test; known flake on this host) |
+| MinGW-w64 cross-build | ✅ 75 exports |
+| Managed (local runner) | ✅ 46/46 |
+
+### New tests (M6)
+
+Native (13): JSON parser (valid, limits, errors), scene parsing and field expansion, rendering of rectangles, text (FreeType, alignment, fit) and images; chroma and luma key pixel tests and the D3D11 keyer comparison; keyed layer with the older 48-byte layer struct; overlay channel across cuts and fades; lower third on an overlay with live fields and timer; multiview layout with tally; multiview recording (counts skipped ticks and encoder drops so slow sanitizer builds stay honest); **replay**: validation, buffer statistics, playback from the oldest frame at 50 % recorded to a file and decoded (flash every 0.5 s live → every 1.0 s ± 0.15 s), pause holds the position, the recorded input removed while its replay stays. Managed (2): graphics on an overlay across a rebuild; replay + rename + multiview recording across a rebuild, replay removed with its input.
+
+### Limitations
+
+- No real green-screen camera footage keyed; the GPU keyer ran on WARP only.
+- Replay soak (10 min buffer at 1080p, memory) not run; replay is video only.
+- HTML graphics not implemented (renderer decision pending).
+
 ## Run: Milestone 5 (streaming and recording) — 2026-11-21
 
 ### GitHub Actions

@@ -1,11 +1,81 @@
 # MIX IT — Development Status
 
-_Last updated: 2026-11-21 (Milestone 5)_
+_Last updated: 2026-11-21 (Milestone 6)_
 
-**Current milestone:** M5 — Streaming and recording → **IMPLEMENTED**, tested on Linux and Windows CI (commit cc2cc38). Hardware encoders and real streaming platforms not yet exercised.
-**Previous milestones:** M4 IMPLEMENTED (real audio devices / commercial plug-ins pending); M3 IMPLEMENTED (reference-hardware checks pending); M1/M2 TESTED.
-**Next milestone:** M6 — Graphics and production tools.
+**Current milestone:** M6 — Graphics and production tools → **IMPLEMENTED**, tested on Linux and Windows CI (all jobs green at e41d496, run 44856343384). Real green-screen footage, GPU keyer on real hardware and HTML graphics pending.
+**Previous milestones:** M5 IMPLEMENTED (hardware encoders / real platforms pending); M4 IMPLEMENTED (real audio devices / commercial plug-ins pending); M3 IMPLEMENTED (reference-hardware checks pending); M1/M2 TESTED.
+**Next milestone:** M7 — Advanced features (command API, macros/automation, remote control, tally, PTZ, plug-in SDK).
 **Owner decision in force (2026-11-19):** no downloadable package/ZIP until M9. CI still builds, smoke-tests and self-tests the Release package on every push; upload only with repository variable `MIXIT_PUBLISH_PACKAGE=true`.
+
+## Completed in M6
+
+| Item | Status | Evidence |
+|---|---|---|
+| Chroma and luma key per layer, CPU + D3D11 (same formulas) | TESTED | pixel tests; D3D11 vs CPU on WARP (Windows CI) |
+| Four overlay channels (downstream keys) with fades, kept across cuts, AFV | TESTED | `Buses.OverlayChannelStaysOnAirAcrossCutsAndFades` |
+| Graphics inputs: JSON scenes, FreeType text (embedded DejaVu), images, live fields, clock, stopwatch/countdown | TESTED | render tests; lower third with live field + timer on an overlay |
+| Title templates: lower third, title, clock, countdown, scoreboard, logo | TESTED (automated) | managed test + self-test |
+| Multiview (preview, program, inputs 1–8, labels, tally) on screen and as an output source | TESTED | native tests, managed recording, self-test monitor |
+| Instant replay: 5–600 s per input, mark in, play at 0.1–2×, pause, take to air | TESTED | `Replay.SlowMotionPlaybackOfARecordedInput` (decoded cadence), managed test, self-test |
+| Basic 2D virtual set: keyed presenter on an overlay over a background, placement presets | IMPLEMENTED (basic) | composed of tested keys/overlays; no real-footage test |
+| C ABI 0.6.0 (75 exports) + managed bindings + Graphics Studio and Replay & Multiview sections | TESTED | xUnit 46/46, WPF build, self-test PASS |
+
+## Defects found during M6 (fixed)
+
+1. **Overlay channel emptied on air** when the input list was rebuilt: the WPF ComboBox wrote a null selection back into the channel view model, which applied it. Found by the Windows self-test; null selections are now ignored.
+2. **Replay encoder race** (TSan, CI): the encoder read the frame size after giving the frame back to its pool, and a buffer kept alive by a replay input could still hold frames of a removed input. `ReplayBuffer::detach()` now releases every pool frame before the pool goes away; the test removes the recorded input while its replay stays.
+3. Key validation rejected zero-initialized fields of the *inactive* key type; only the active type is validated now.
+4. Multiview recording test assumed 30 fps rendering; slow sanitizer builds skip ticks — the test now accounts for counted skips and encoder drops instead of hiding them.
+
+## Deviations from the M6 plan (honest list)
+
+| Planned | As built | Why / next |
+|---|---|---|
+| HTML/browser graphics | not built | renderer decision (CEF vs WebView2) needs its own ADR and licence review |
+| Animated graphics (moves, wipes) | fades only (overlay channels) | later (M8 with the template editor) |
+| Virtual sets | 2D: keyed camera on an overlay over a background input | 3D sets / tracking out of scope |
+| Replay with audio, playlists, highlight export | video only, one clip at a time | time-stretched audio later |
+| Multiview layouts, external display outputs | one fixed layout, in-app and as an output | M8 (swap-chain monitors, display outputs) |
+
+## Still unverified (needs a Windows workstation)
+
+| Item | How to check |
+|---|---|
+| Green/blue-screen camera keyed cleanly (GPU compositor) | Graphics Studio → overlay with "Green screen" key on a capture input |
+| Replay at 1080p60 for 10 min buffer: memory and dropped frames | Replay & Multiview → add replay 300 s, watch "frames not recorded" |
+| M5 items: hardware encoders, real platforms (RTMPS) | see M5 section |
+| M4/M3 items | see their sections |
+
+## Build status
+
+| Target | Result |
+|---|---|
+| Windows: MSVC `/W4 /WX`, .NET 10 incl. WPF | ✅ 0 warnings (CI, e41d496) |
+| Linux Debug / Release / ASan+UBSan / TSan | ✅ (CI, e41d496) |
+| MinGW-w64 cross-build | ✅ 75 exports |
+| Windows package (self-contained) | ✅ built + self-tested in CI; **not uploaded** (owner decision until M9) |
+
+## Test results
+
+Native **154/154** (Windows CI) · Linux 153 + 1 Windows-only skip (Debug/ASan; TSan see known issue 3) · managed **46/46** · production self-test PASS (recording, lower third, multiview, replay). Details: [docs/TEST_REPORT.md](docs/TEST_REPORT.md).
+
+## Known issues
+
+1. **Patent/licence decision before release:** H.264/AAC encoding and the OpenH264 copy inside the LGPL FFmpeg build (THIRD_PARTY_LICENSES ⚖️). FreeType (FTL) needs the credit line in the About box (M9 checklist).
+2. Graphics and multiview render on the CPU; with the D3D11 compositor they are uploaded like other inputs. Profile on reference hardware before moving them to the GPU.
+3. `Session.ScalesInputsToProgramSizeAndCutsBetweenInputs` (M3) failed once under TSan on the 2-core dev host (timing under load) and passed 3/3 on rerun.
+4. Text has no complex-script shaping (Arabic, Indic); Latin, Cyrillic and Greek are covered by DejaVu.
+5. M5/M4/M3 known issues still apply.
+
+## Next recommended tasks
+
+1. **M7 — Advanced features** (now): a command layer shared by UI, macros and the remote API; macros/automation; documented remote-control protocol (local HTTP/WebSocket with authentication); tally; PTZ (VISCA over IP); plug-in SDK interfaces.
+2. **Owner:** H.264/AAC licensing route; ASIO licence; code-signing certificate; licence activation server.
+3. On a Windows workstation: the "Still unverified" checks of M3–M6.
+
+---
+
+# Milestone 5 record
 
 ## Completed in M5
 
