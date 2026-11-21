@@ -236,3 +236,36 @@ thread (`av_sync_events`, `av_offset_*`).
 **Not yet.** Exclusive-mode/ASIO backends, multichannel routing beyond
 stereo, device timestamps for capture endpoints, insert latency compensation,
 out-of-process plug-ins.
+
+## 11. Outputs (M5, implemented)
+
+Design decisions: ADR-0010.
+
+**Feeding.** After rendering tick *n* the tick thread passes the program
+frame reference to every program pipeline, and each input's frame of that
+tick to its ISO pipelines (`OutputManager::feed_video`, atomic slot array, no
+locks). The audio thread passes the master bus block (program) and each
+input's delay-aligned raw block (ISO) to `feed_audio` after `mix_block`
+step 1/4. `wants(source)` is a single atomic bit test when nothing records.
+
+**Encoder thread** (`mixit-enc`, one per distinct encode): converts
+BGRA → YUV 4:2:0/NV12 (BT.709 limited) with swscale, releases the frame
+reference immediately, encodes with pts = tick − first tick; accumulates audio
+on the timeline (gaps → silence, overlaps trimmed) into AAC frames with
+pts = sample − first sample. A keyframe can be forced (new destination,
+reconnect). Each packet is copied into every attached sink's queue.
+
+**Sink thread** (`mixit-out`, one per destination): opens the muxer (and the
+file/connection, with an interrupt callback: stop while connecting cancels,
+5 s timeout per network operation), starts at a keyframe, rebases timestamps
+to 0, writes with `av_interleaved_write_frame`, repeats SPS/PPS for TS/HLS
+(`dump_extra`), rotates segments at keyframes, checks free space every 2 s,
+reconnects with back-off, finalizes on stop.
+
+**Lifetimes.** The last output using a pipeline unpublishes it, waits until
+the tick and audio threads have moved on two iterations, flushes it (final
+packets reach the stopping sinks) and destroys it. The program pool has 6
+extra frames and input pools 3 for encoder queues.
+
+**Not yet.** GPU-resident frames to hardware encoders, HEVC/AV1, adaptive
+bitrate, audio-only and multi-track recording, RTMPS certificate options.

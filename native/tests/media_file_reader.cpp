@@ -3,6 +3,7 @@
 #if MIXIT_HAVE_FFMPEG
 
 #include <chrono>
+#include <cstdio>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -85,6 +86,7 @@ DecodedMedia decode_media(const std::string& url, const std::string& options, do
     AVPacket* pkt = av_packet_alloc();
     AVFrame* frame = av_frame_alloc();
     bool audio_started = false;
+    int packets_logged = 0;
     auto take = [&](AVCodecContext* dec, int stream) {
         while (avcodec_receive_frame(dec, frame) >= 0) {
             const AVRational tb = fc->streams[stream]->time_base;
@@ -119,6 +121,16 @@ DecodedMedia decode_media(const std::string& url, const std::string& options, do
         deadline.until = std::max(deadline.until, std::chrono::steady_clock::now() + std::chrono::seconds(5));
         err = av_read_frame(fc, pkt);
         if (err < 0) break;
+        if (packets_logged < 12 && (pkt->stream_index == vi || pkt->stream_index == ai)) {
+            const double tb = av_q2d(fc->streams[pkt->stream_index]->time_base);
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "%s %.4f/%.4f%s; ", pkt->stream_index == vi ? "v" : "a",
+                          pkt->pts == AV_NOPTS_VALUE ? -1.0 : static_cast<double>(pkt->pts) * tb,
+                          pkt->dts == AV_NOPTS_VALUE ? -1.0 : static_cast<double>(pkt->dts) * tb,
+                          (pkt->flags & AV_PKT_FLAG_KEY) != 0 ? " K" : "");
+            out.first_packets += buf;
+            ++packets_logged;
+        }
         if (pkt->stream_index == vi && vdec != nullptr) {
             if (avcodec_send_packet(vdec, pkt) < 0) ++out.decode_errors;
             take(vdec, vi);

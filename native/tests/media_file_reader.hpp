@@ -19,6 +19,7 @@ struct DecodedMedia {
     int sample_rate = 0, channels = 0;
     double audio_start = 0.0;            // seconds, first decoded sample
     std::vector<float> audio;            // first channel, decoded
+    std::string first_packets;           // diagnostics: "v pts/dts key; a pts/dts; ..." (first 12 packets, seconds)
 };
 
 // `options`: demuxer options "key=value;key=value" (e.g. "listen=1"); a

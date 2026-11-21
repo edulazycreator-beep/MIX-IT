@@ -474,7 +474,10 @@ private:
         }
         pkt->pts -= offset_[stream];
         pkt->dts -= offset_[stream];
-        if (pkt->pts < 0 || pkt->dts < 0) {  // audio from before the first keyframe
+        // Audio from before the first keyframe is dropped. Video dts may be
+        // negative with reordering encoders; the muxer handles that without
+        // moving the presentation times (A/V sync is in the pts).
+        if (pkt->pts < 0 || (stream == 1 && pkt->dts < 0)) {
             av_packet_free(&pkt);
             return true;
         }
@@ -900,6 +903,22 @@ private:
             if (r < 0) break;
             pkt_->stream_index = stream;
             if (stream == 0 && pkt_->dts == AV_NOPTS_VALUE) pkt_->dts = pkt_->pts;
+            if (stream == 0) {
+                // The first packet is the first frame (an IDR, first in both
+                // orders), whose pts we set to 0. Some encoders (Media
+                // Foundation) shift timestamps by their reorder delay; undo
+                // any constant shift so video stays on the session timeline.
+                if (!video_shift_known_) {
+                    video_shift_known_ = true;
+                    video_shift_ = -pkt_->pts;
+                    if (video_shift_ != 0) {
+                        logger_.logf(MIXIT_LOG_INFO, "output", "encoder {} shifts timestamps by {} frames; corrected",
+                                     encoder_name_, -video_shift_);
+                    }
+                }
+                pkt_->pts += video_shift_;
+                pkt_->dts += video_shift_;
+            }
             if (stream == 0 && pkt_->duration <= 0) pkt_->duration = 1;  // one tick (time base = 1/fps)
             deliver(stream);
             av_packet_unref(pkt_);
@@ -1040,6 +1059,8 @@ private:
     std::int64_t audio_pts_ = 0;
     std::vector<std::vector<float>> acc_;
     std::uint32_t acc_frames_ = 0;
+    bool video_shift_known_ = false;
+    std::int64_t video_shift_ = 0;
 
     // Feeding rings (SPSC).
     std::array<VideoItem, kVideoQueue> vring_{};

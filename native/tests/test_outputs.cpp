@@ -222,7 +222,12 @@ TEST(Outputs, RecordsTheProgramToMp4InSync) {
     EXPECT_NEAR(static_cast<double>(m.audio.size()) / 48000.0, span, 0.25) << "audio covers the video";
     int matched = 0;
     const double offset = max_av_offset(m, &matched);
-    std::printf("A/V: %d flashes matched, worst offset %.3f ms\n", matched, offset * 1000.0);
+    std::printf("A/V: %d flashes matched, worst offset %.3f ms\nfirst packets: %s\nflashes:", matched, offset * 1000.0,
+                m.first_packets.c_str());
+    for (double t : flash_times(m)) std::printf(" %.4f", t);
+    std::printf("\nclicks:");
+    for (double t : click_times(m)) std::printf(" %.4f", t);
+    std::printf("\naudio start %.4f\n", m.audio_start);
     EXPECT_GE(matched, 6);
     EXPECT_LT(offset, 0.040) << "flash vs click in the recording";
     // Recording again to the same name never overwrites the first file.
@@ -323,8 +328,10 @@ TEST(Outputs, ABrokenDestinationDoesNotDisturbTheOthers) {
     ASSERT_EQ(mixit_session_start(s.session), MIXIT_OK);
     ASSERT_EQ(mixit_session_start_output(s.session, bad), MIXIT_OK) << last_error();
     ASSERT_EQ(mixit_session_start_output(s.session, good), MIXIT_OK) << last_error();
-    sleep_ms(4000);
-    const mixit_output_stats b = s.stats(bad);
+    // A refused connection takes ~2 s to fail on Windows (SYN retries).
+    const auto t0 = std::chrono::steady_clock::now();
+    const mixit_output_stats b = s.wait_for(bad, MIXIT_OUTPUT_RECONNECTING, 15000);
+    std::this_thread::sleep_until(t0 + std::chrono::seconds(4));
     EXPECT_EQ(b.state, MIXIT_OUTPUT_RECONNECTING);
     EXPECT_GE(b.reconnects, 1u);
     EXPECT_NE(std::string(b.last_error), "");

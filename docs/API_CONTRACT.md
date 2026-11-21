@@ -1,14 +1,15 @@
-# MIX IT — Native Engine API Contract (v0.4.0)
+# MIX IT — Native Engine API Contract (v0.5.0)
 
 Header: [`native/include/mixit/mixit_engine.h`](../native/include/mixit/mixit_engine.h).
 Library: `mixit_engine.dll` (Windows x64), `libmixit_engine.so` (Linux dev host).
-Exported symbols: exactly the 54 functions below (verified with `nm`/`objdump`).
+Exported symbols: exactly the 60 functions below (verified with `nm`/`objdump`).
 
 | Version | Added |
 |---|---|
 | 0.1.0 (M1) | engine lifecycle, logging, diagnostics, capabilities |
 | 0.2.0 (M2) | sessions (lifecycle steps 3–8), test-signal inputs, program frame access, media library (FFmpeg) queries |
 | 0.3.0 (M3) | media-file inputs, preview bus, cut, transitions, layers, bus frame access, compositor preference, capture devices (experimental); appended fields in `session_config`, `session_stats`, `input_stats` |
+| 0.5.0 (M5) | outputs: recording and streaming (add/remove/start/stop, stats), encoder query |
 | 0.4.0 (M4) | audio mixer (strips, buses, monitor, meters, loudness, bus audio read), audio devices (monitor output, audio inputs; experimental), VST3 inserts (experimental); appended audio counters in `session_stats`, `input_stats` |
 
 API 0.x requires an **exact minor match** at `mixit_engine_create`.
@@ -184,6 +185,48 @@ Appended fields keep older callers working: a 0.2-sized `mixit_session_config`
 
 **`mixit_session_add_capture_source(session, config, out_input_id)`** — only when not RUNNING. `device_id` from enumeration; `width`/`height` both 0 (= largest mode up to 1920×1080) or both set; `frame_rate_num` 0 = highest up to 60 fps. Video only; frames stamped on arrival. Device loss: last frame held, `decode_errors` counted, reopened every second (ADR-0007). `NOT_FOUND` no such device; `NOT_SUPPORTED` no usable mode / no backend.
 
+### Outputs: recording and streaming — API 0.5 (M5, ADR-0010)
+
+An output encodes the program — or one input (ISO: the input's own size and
+its clean pre-strip audio) — as H.264 + AAC and writes it to a file or a
+network destination. Outputs with identical source and encoder settings share
+one encoder. Each destination has its own thread and bounded queue; a slow or
+broken destination drops its own packets up to the next keyframe (counted) or
+reconnects, and never blocks the session or other outputs.
+
+**`mixit_session_add_output(session, config, out_id)`** — any time; validates
+the url/format (`INVALID_ARGUMENT`), bitrates (video 100–200000 kb/s, audio
+32–512, keyframe 250–10000 ms), segments (files only, ≥ 2 s) and the source
+input (`NOT_FOUND`; ISO needs video). Formats from the url: `rtmp(s)://` → FLV,
+`srt://`/`udp://`/`rtp://`/`tcp://` → MPEG-TS, `.m3u8` → HLS, `.mp4`, `.mov`,
+`.mkv`, `.ts`, `.flv`. MP4/MOV are fragmented unless
+`MIXIT_OUTPUT_FLAG_NOT_FRAGMENTED`. Files: an existing name is never
+overwritten (`name (2).ext`), missing folders are created, segments are
+`name_0001.ext`, …
+
+**`mixit_session_start_output(session, id)`** — session RUNNING
+(`INVALID_STATE` otherwise or when already started). Opens the encoder here
+(automatic choice: NVENC, Quick Sync, AMF, Media Foundation, OpenH264, x264;
+or the named one — `NOT_FOUND` if unknown, `NOT_SUPPORTED` if it cannot open).
+The destination connects in the background.
+
+**`mixit_session_stop_output(session, id)`** — asynchronous: STOPPING, then
+IDLE once the file is finalized. **`mixit_session_stop` / destroy** stop every
+output and return only after files are finalized.
+**`mixit_session_remove_output`** — `INVALID_STATE` while started.
+
+**`mixit_session_get_output_stats(session, id, stats)`** — state
+(IDLE/STARTING/RUNNING/RECONNECTING/STOPPING/FAILED), encoder and whether it is
+hardware, bytes, packets, dropped packets (this destination), encoder dropped
+frames (shared encoder), reconnects, segments, bitrate (last ~2 s), queue ms,
+media duration, free bytes on the recording drive, data-lost flag, current
+file, last error. Urls in errors and logs are redacted (stream keys,
+passwords and query values become `***`).
+
+**`mixit_query_video_encoders(encoders, capacity, out_count)`** — global; each
+H.264 encoder of the build, open-tested at 1280×720 (slow, not on a UI
+thread). `NOT_SUPPORTED` without FFmpeg.
+
 ### Audio mixer — API 0.4 (M4)
 
 The session mixes on its own audio thread in 10 ms blocks on the session sample
@@ -261,6 +304,9 @@ Plug-ins run **inside the engine process**: a faulty plug-in can crash the engin
 | `mixit_audio_insert_config` | 40 | `path` 8, `state` 24 |
 | `mixit_audio_insert_info` | 320 | `process_errors` 16, `class_id` 24 |
 | `mixit_audio_insert_parameter` | 256 | `default_value` 16, `title` 32 |
+| `mixit_output_config` | 56 | `url` 8, `video_kbps` 32 |
+| `mixit_output_stats` | 888 | `duration_ns` 72, `encoder` 88, `current_file` 120, `last_error` 632 |
+| `mixit_video_encoder_info` | 360 | `name` 8 |
 | `mixit_codec_info` | 128 | |
 
 Changing any of these requires updating the `static_assert`s in `src/abi/*.cpp`, `MixIt.Interop/NativeStructs.cs`, the layout tests, and bumping `MIXIT_API_VERSION`.

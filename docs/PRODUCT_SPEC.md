@@ -16,7 +16,7 @@ Status: PLANNED · IN_PROGRESS · EXPERIMENTAL · IMPLEMENTED · TESTED · PRODU
 | Hardware capability detection — GPU adapters (DXGI) | TESTED (Windows CI: software adapters only) | M1 |
 | Codec availability in the FFmpeg build (incl. hardware encoders present) | TESTED | M2 |
 | Capture device enumeration (Media Foundation) | EXPERIMENTAL (no real device tested) | M3 |
-| Hardware encoder open-test, audio devices, network, storage | PLANNED | M4–M5 |
+| Hardware encoder open-test (M5), audio devices (M4), storage free space per recording (M5); network interfaces | IMPLEMENTED / PLANNED (network) | M4–M5 |
 | Pipeline monitoring (ticks, lateness, drops, repeats, skips, A/V offset) | TESTED | M2 |
 | Runtime monitoring (CPU/GPU load, audio underruns, disk) | PLANNED | M3–M5 |
 | Performance presets (Low Resource → Professional) | PLANNED | M8 |
@@ -68,12 +68,13 @@ Status: PLANNED · IN_PROGRESS · EXPERIMENTAL · IMPLEMENTED · TESTED · PRODU
 
 | Feature | Status | Milestone |
 |---|---|---|
-| RTMP / RTMPS (TLS validated) | PLANNED | M5 |
-| SRT caller / listener / rendezvous | PLANNED | M5 |
-| HLS with secured HTTP delivery | PLANNED | M5 |
-| Multiple isolated destinations, reconnection, statistics | PLANNED | M5 |
-| Encoders: software, NVENC, Quick Sync, AMF (detected) | PLANNED | M5 |
-| Program / ISO / audio recording, MP4/MOV/MKV, segmentation, recovery | PLANNED | M5 |
+| RTMP (tested against a local server) / RTMPS (TLS by FFmpeg; not yet tested against a TLS server) | TESTED / EXPERIMENTAL | M5 |
+| SRT caller (tested against a local listener); listener/rendezvous via URL options | TESTED (caller) | M5 |
+| HLS to a folder (playlist + segments); HTTP delivery | TESTED (folder) / PLANNED (HTTP) | M5 |
+| Multiple isolated destinations, shared encoders, reconnection with back-off, statistics | TESTED | M5 |
+| Encoders: NVENC, Quick Sync, AMF, Media Foundation, OpenH264 (open-tested, hardware first) | TESTED (software); hardware EXPERIMENTAL (no GPU in CI) | M5 |
+| Program and ISO recording, MP4/MOV (fragmented)/MKV/TS, segmentation, no overwrite, free-space stop | TESTED | M5 |
+| Audio-only and multi-track audio recording | PLANNED | M6+ |
 
 ## Graphics, production, automation, outputs
 

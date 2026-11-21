@@ -8,3 +8,8 @@
 # suppressed; races in MIX IT code are still reported.
 race:libavutil.so
 race:libavcodec.so
+
+# libsrt (third party, uninstrumented): lock-order cycle between its listener
+# and caller queues when both ends run in one process (the SRT output test).
+deadlock:libsrt
+race:libsrt

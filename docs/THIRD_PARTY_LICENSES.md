@@ -31,8 +31,8 @@ restore on a connected machine must confirm they resolve (DEVELOPMENT_STATUS).
 
 | Name | Milestone | License | Constraints for a closed-source commercial product |
 |---|---|---|---|
-| OpenH264 (optional software H.264) | M5 | BSD-2-Clause | Cisco's prebuilt binary carries their H.264 patent licence only when downloaded from Cisco at install/run time; self-built binaries do not. ⚖️ |
-| H.264 / HEVC / AAC patents | M5 | patent pools | Separate from copyright; encoder distribution may require pool licences. ⚖️ |
+| OpenH264 (software H.264 fallback) | **in use since M5** — compiled into the pinned BtbN LGPL FFmpeg 9.0.2 build (not Cisco's binary) | BSD-2-Clause | Cisco's prebuilt binary carries their H.264 patent licence only when downloaded from Cisco at install/run time; **the copy inside the FFmpeg build does not**. Owner decision before M9: rely on hardware encoders, download Cisco's binary at run time, or license H.264. ⚖️ |
+| H.264 / HEVC / AAC patents | **relevant since M5** (H.264 + AAC encoding) | patent pools | Separate from copyright; distributing encoders may require pool licences (H.264 and AAC: Via LA; HEVC: Access Advance and Via LA). Legal review before commercial release (M9). ⚖️ |
 | NDI SDK | M3/M5 | NDI SDK License Agreement (royalty-free) | Attribution "NDI® is a registered trademark of Vizrt NDI AB" in About box and docs; link to ndi.video near NDI selection UI, website and docs; ship NDI DLLs in the app folder; EULA must cover NDI terms; AAC/H.264/H.265 licensing is the developer's responsibility. NDI Advanced SDK = separate commercial licence. |
 | Blackmagic DeckLink SDK | M3/M5 | Blackmagic Design SDK EULA | Runtime via Desktop Video drivers (COM). Confirm header redistribution and trademark terms. ⚖️ |
 | ASIO SDK | M4 | Steinberg proprietary licence **or** GPLv3 (dual, since Oct 2025) | Must use the **proprietary** agreement; the GPLv3 option is incompatible with closed source. ASIO trademark/logo rules. ⚖️ |

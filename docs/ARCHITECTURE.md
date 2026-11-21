@@ -237,3 +237,4 @@ Details and raw results: [TEST_REPORT.md](TEST_REPORT.md).
 - [ADR-0007](adr/0007-capture-media-foundation.md) Video capture through Media Foundation
 - [ADR-0008](adr/0008-vst3-in-process-host.md) VST3 effects hosted in the engine process (first version; out-of-process host planned)
 - [ADR-0009](adr/0009-audio-engine-timeline-and-device-clock-bridge.md) Audio engine on the session sample timeline, drift bridge to device clocks
+- [ADR-0010](adr/0010-outputs-shared-encoders-isolated-destinations.md) Outputs: shared encoders, isolated destinations, timeline timestamps

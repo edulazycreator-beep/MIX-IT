@@ -3,6 +3,23 @@
 All notable changes to MIX IT. Format: Keep a Changelog; versions follow the
 native API version until the first product release.
 
+## [0.5.0] — 2026-11-21 — Milestone 5: Streaming and recording
+
+### Added
+- C ABI 0.5.0 (60 exports): outputs (add/remove/start/stop, statistics) and `mixit_query_video_encoders`.
+- Output engine (ADR-0010): H.264 + AAC via FFmpeg; encoder chosen by open-testing, hardware first (NVENC, Quick Sync, AMF, Media Foundation, then OpenH264/x264); one encoder shared by outputs with the same settings; timestamps from the session timeline (recorded MP4: flash/click offset 0.02 ms).
+- Destinations, each with its own thread and bounded queue: files (fragmented MP4/MOV, MKV, MPEG-TS, FLV), RTMP/RTMPS, SRT, UDP/RTP/TCP (MPEG-TS), HLS to a folder. Reconnect with back-off; drop-to-keyframe when a destination falls behind (counted; data loss flagged for files); segmentation; free-space stop; recordings never overwrite files; folders created as needed.
+- ISO recording of any input at its own size with its clean audio.
+- Stream keys, passwords and query values redacted ("***") in logs, errors and the UI.
+- Managed: `OutputSettings`, `OutputStatistics`, `VideoEncoderInfo`, `UrlRedaction`, `NativeSession` output calls; `ProductionService` outputs with stable ids across session rebuilds (ISO outputs follow their input).
+- Desktop: **Streaming & Recording** section — add file/RTMP(S)/SRT/HLS destinations for the program or an input, bitrate, encoder test, segment length, stream key in a password box; live state, bitrate, buffer, drops, errors; Start/Stop/Remove. The self-test records 2.5 s and checks the finalized file.
+- ADR-0010; API contract §outputs; engine design §11.
+- 10 native tests (141 total) that decode what was written; 2 managed tests (44 total).
+
+### Changed
+- Program pool 10 → 16 frames and input pools +3 (encoder queues).
+- `AsyncCommand.ExecuteAsync()` for callers that must wait.
+
 ## [0.4.0] — 2026-11-19 — Milestone 4: Audio engine
 
 ### Added
